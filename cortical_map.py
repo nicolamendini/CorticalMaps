@@ -65,7 +65,7 @@ class CorticalMap(nn.Module):
         init_rfs = torch.rand(sheet_units**2, aff_cf_channels*aff_cf_units**2, 1)
         init_rfs /= init_rfs.sum(1, keepdim=True)
         self.rfs = nn.Parameter(init_rfs) 
-        
+                
         init_lat = torch.ones(1,1,lat_cf_units,lat_cf_units)
         init_lat = init_lat.view(1,lat_cf_units**2,1).repeat(sheet_units**2,1,1)
         init_lat /= init_lat.sum(1, keepdim=True)
@@ -100,17 +100,17 @@ class CorticalMap(nn.Module):
         lat_correlations = 0
         raw_aff = 0
         x_tiles = 0
-        
+                
         # ensuring that the weights stay always non negative
         with torch.no_grad():
-            self.rfs *= self.rfs>0
-            self.lat_weights *= self.lat_weights>0
+            self.rfs *= (self.rfs>0)
+            self.lat_weights *= (self.lat_weights>0)
         
         lat_w = (1-self.lat_base_corr)*self.lat_weights.detach() + self.lat_base_corr*(1/self.lat_cf_units**2)
         rfs = self.rfs
         if not learning_flag:
             rfs = rfs.detach()
-                        
+                                    
         # computing the afferent response
         if not reco_flag:
             self.lat_mean *= 0
@@ -145,12 +145,12 @@ class CorticalMap(nn.Module):
     
             # short range excitation is applied first
             pos_pad = self.sre.shape[-1]//2
-            lat = F.pad(lat, (pos_pad,pos_pad,pos_pad,pos_pad), value=0)
+            lat = F.pad(lat, (pos_pad,pos_pad,pos_pad,pos_pad), value=self.homeo_target)
             lat = F.conv2d(lat, self.sre)
             
             # splitting into tiles and computing the lateral inhibitory component
             pad = self.lat_cf_units//2*self.lat_cf_dilation
-            lat_tiles = F.pad(lat, (pad,pad,pad,pad), value=0)
+            lat_tiles = F.pad(lat, (pad,pad,pad,pad), value=self.homeo_target)
             lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
             lat_tiles = lat_tiles.permute(2,0,1)
             
@@ -168,7 +168,7 @@ class CorticalMap(nn.Module):
 
                 # learn the lateral correlations
                 self.lat_mean /= self.lat_iters
-                lat_tiles = F.pad(self.lat_mean, (pad,pad,pad,pad), value=0)
+                lat_tiles = F.pad(self.lat_mean, (pad,pad,pad,pad), value=self.homeo_target)
                 lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
                 lat_tiles = lat_tiles.permute(2,0,1)
                 weighted_lat_tiles = lat_tiles * self.lat_mean.view(self.sheet_units**2,1,1)
@@ -184,3 +184,9 @@ class CorticalMap(nn.Module):
                 self.strength -= (curr_max_lat - self.lat_strength_target)*self.strength_lr
                                                                                 
         return raw_aff, lat, lat_correlations, x_tiles
+    
+    def get_rfs(self):
+        return self.rfs.detach()
+    
+    def get_lat_weights(self):
+        return self.lat_weights.detach()

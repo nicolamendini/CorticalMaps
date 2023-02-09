@@ -81,21 +81,20 @@ def run(X, model=None, stats=None, bar=True):
         
         if idx%config.MAP_SAMPLS==0 and not config.PRINT:
             stats['map_tracker'][idx//config.MAP_SAMPLS] = get_orientations(
-                model.rfs.detach(), config.KSIZE, config.GRID_SIZE)[0]
+                model.get_rfs(), config.KSIZE, config.GRID_SIZE)[0]
 
         rand_idx = random.randint(0, X.shape[0]-1)
         sample = X[rand_idx:rand_idx+1]
         sample = TF.rotate(sample, random.randint(0,360), interpolation=TF.InterpolationMode.BILINEAR)
 
         w = sample.shape[-1]
-        totpad = round(w * config.TRANSLATE)
-        new_w = w - totpad
+        totpad = w - config.CROPSIZE
         randpad = torch.randint(totpad, (2,))
-        sample = sample[:,:,randpad[0]:(new_w+randpad[0]),randpad[1]:(new_w+randpad[1])]
+        sample = sample[:,:,randpad[0]:(config.CROPSIZE+randpad[0]),randpad[1]:(config.CROPSIZE+randpad[1])]
 
         if random.random() > 0.5:
             sample = sample.flip(-1)
-            
+                        
         sample = F.interpolate(sample, config.GRID_SIZE+(config.KSIZE-1)*config.EXPANSION, mode='bilinear')
         #sample = torch.relu(sample)
         #print(sample.min(), sample.max())
@@ -180,7 +179,7 @@ def run(X, model=None, stats=None, bar=True):
             stats['last_sample'] = sample
             stats['last_lat'] = lat
             
-            rfs_det = model.rfs.detach()
+            rfs_det = model.get_rfs()
             aff_flat = raw_aff.detach().view(-1)
             norms = torch.sqrt((rfs_det**2).sum(1) * (x_tiles**2).sum(2)).view(-1)
             aff_flat = aff_flat * lat.view(-1) / (norms * lat.sum() + 1e-11)

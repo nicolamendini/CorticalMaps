@@ -225,7 +225,7 @@ def get_gabor(size, theta, Lambda, psi, gamma):
 # Function to measure the typical distance between iso oriented map domains
 # Samples a certain number of orientations given by 'precision' and returns 
 # the histograms of the gaussian doughnuts that were used to fit the curve together with the peak
-def get_typical_dist_fourier(orientations, grid_size, size, match_std=1, precision=10, mask=3):
+def get_typical_dist_fourier(orientations, grid_size, size, match_std=2, precision=10, mask=3):
     
     # R is the size of the map after removing some padding size, must be odd    
     R = grid_size//2 - size
@@ -377,7 +377,7 @@ def get_orientations(rfs, KSIZE, GRID_SIZE, ONOFF=True, PSTEPS=2, DET_STEPS=15):
     
     # get the gabor detectors
     detectors = get_orientation_detectors(KSIZE,KSIZE,PSTEPS,DET_STEPS).to(rfs.device)
-    rfs /= torch.sqrt((rfs**2).sum(1, keepdim=True))
+    rfs = rfs / torch.sqrt((rfs**2).sum(1, keepdim=True))
     rfs = rfs.view(-1, 2, KSIZE, KSIZE)
 
     # decide whether to measure the on or off channel
@@ -442,7 +442,7 @@ def cosine_loss(raw_aff, lat_correlations, model):
 def plot_absolute_phases(model,target_channel=0):
 
     # exctracting useful params
-    rfs = model.rfs.detach().cpu()
+    rfs = model.get_rfs().cpu()
     aff_units = model.aff_cf_units
     sheet_units = model.sheet_units
     channels = model.aff_cf_channels

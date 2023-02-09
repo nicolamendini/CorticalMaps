@@ -5,7 +5,29 @@ import numpy as np
 import torch
 import os
 import struct
+import glob
+from PIL import Image
 
+# function to import a simple fruit dataset
+def import_fruit():
+    
+    X = []
+    for filename in glob.glob("fruit_dataset/*.jpg"):
+        X.append(np.asarray(Image.open(filename)))
+
+    X = np.array(X) / 255.
+    X = torch.tensor(X[:, 8:-8, 8:-8, :]).float()
+    X = X.transpose(1,-1)
+
+    # 0.299R + 0.587G + 0.114B
+    rgb_weights = torch.tensor([0.299, 0.587, 0.114])
+    X = X*rgb_weights[None, :, None, None]
+    X = torch.sum(X, 1, keepdim=True)
+    X = torch.cat([X, torch.rot90(X, 1, [2,3]), torch.rot90(X, 2, [2,3]), torch.rot90(X, 3, [2,3])], dim=0)
+
+    X = X.type(torch.float16).cuda()
+    
+    return X
 
 # function to import and unpack the norb dataset
 def import_norb():
