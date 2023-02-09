@@ -1,0 +1,5 @@
+sim_data/
+__pycache__/
+versions/
+the-small-norb-dataset-v10/
+fruit_dataset/
