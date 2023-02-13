@@ -119,9 +119,9 @@ def plot_results(kvals, scalevals, ensemble, affinities, compressib, maps, ratio
 # function to start the collection of statistics for different parameter configurations
 def collect():
     
-    #X = import_norb().type(torch.float16).cuda()
-    #X = X[:,:,:162,0,:,:].reshape(-1,1,config.INPUT_SIZE,config.INPUT_SIZE)
-    X = import_fruit()
+    X = import_norb().type(torch.float16).cuda()
+    X = X[:,:,:162,0,:,:].reshape(-1,1,config.INPUT_SIZE,config.INPUT_SIZE)
+    #X = import_fruit()
     X, X_orig, X_mask = retina_lgn(
         X,
         config.RET_LOG_STD,
@@ -136,9 +136,9 @@ def collect():
     )
     X = X.float()
     
-    scalevals = torch.linspace(1,5,11)
+    scalevals = torch.linspace(0,3,11)
     scalevals[0] = 0.1
-    kvals = [1,2,3,4]
+    kvals = [1,2,3,4,5]
     print(scalevals)
 
     ensemble, affinities, compressib, maps, ratios, avg_peaks, spectra = run_print_stats(scalevals, kvals,X)

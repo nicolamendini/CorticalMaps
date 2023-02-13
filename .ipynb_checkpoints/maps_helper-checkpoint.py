@@ -225,7 +225,7 @@ def get_gabor(size, theta, Lambda, psi, gamma):
 # Function to measure the typical distance between iso oriented map domains
 # Samples a certain number of orientations given by 'precision' and returns 
 # the histograms of the gaussian doughnuts that were used to fit the curve together with the peak
-def get_typical_dist_fourier(orientations, grid_size, size, match_std=2, precision=10, mask=3):
+def get_typical_dist_fourier(orientations, grid_size, size, match_std=2, precision=10, mask=0):
     
     # R is the size of the map after removing some padding size, must be odd    
     R = grid_size//2 - size
@@ -429,7 +429,7 @@ def get_norm_loss(weights):
     return w_norm
 
 # ensemble loss
-def cosine_loss(raw_aff, lat_correlations, model):
+def cosine_loss(raw_aff, lat, lat_correlations, model):
     
     #winners = torch.einsum('abcd, abcd ->',h,lat)
     winners = (raw_aff * model.lat_mean).sum()

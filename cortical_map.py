@@ -28,21 +28,16 @@ class CorticalMap(nn.Module):
         lat_base_corr,
         homeo_target,
         homeo_timescale,
-        sre_stand_dev,
-        lri_stand_dev
+        exc_units,
+        lat_cf_units
     ):
         
         super().__init__()
         
-        # defining the sizes of the interactions in neuronal units
-        lat_cf_units = round(float(lri_stand_dev*5))
-        exc_units = round(float(sre_stand_dev*5))
-        exc_units = exc_units+1 if exc_units%2==0 else exc_units
-        
         # defining connections cutoffs and masks
         inh_cutoff = get_circle(lat_cf_units, lat_cf_units/2)    
         exc_cutoff = get_circle(exc_units, exc_units/2)
-        aff_cutoff = get_circle(aff_cf_units,aff_cf_units/2)
+        aff_cutoff = get_circle(aff_cf_units, aff_cf_units/2)
         inh_mask = get_radial_cos(lat_cf_units, exc_units/lat_cf_dilation)**2
         inh_mask *= get_circle(lat_cf_units, exc_units/(2*lat_cf_dilation))
         
@@ -114,7 +109,7 @@ class CorticalMap(nn.Module):
         # computing the afferent response
         if not reco_flag:
             self.lat_mean *= 0
-            x_tiles = F.unfold(x, self.aff_cf_units, dilation=self.aff_cf_dilation)            
+            x_tiles = F.unfold(x, self.aff_cf_units, dilation=self.aff_cf_dilation)    
             x_tiles = x_tiles * self.aff_cf_envelope
             x_tiles = x_tiles.permute(2,0,1)
             raw_aff = torch.bmm(x_tiles, rfs)
@@ -124,6 +119,8 @@ class CorticalMap(nn.Module):
         # if feedback is coming, just take the feedback
         else:
             aff = x
+            
+        lat = torch.relu(aff - self.adathresh)
                         
         # add the bell envelope to the inhibitory weights
         if self.lat_base_corr<1:
@@ -131,8 +128,6 @@ class CorticalMap(nn.Module):
             neg_w /= (neg_w.sum(1, keepdim=True))
         else:
             neg_w = neg_w.expand(self.sheet_units**2,-1,-1)
-                    
-        lat = torch.relu(aff - self.adathresh)
                 
         # reaction diffusion
         for i in range(self.lat_iters):
@@ -142,7 +137,7 @@ class CorticalMap(nn.Module):
                 plt.imshow(lat.detach().cpu()[0,0])
                 plt.show()
                 print(lat.max(), lat.mean())
-    
+                
             # short range excitation is applied first
             pos_pad = self.sre.shape[-1]//2
             lat = F.pad(lat, (pos_pad,pos_pad,pos_pad,pos_pad), value=self.homeo_target)
@@ -176,7 +171,7 @@ class CorticalMap(nn.Module):
                     
             # update the homeostatic variables
             self.avg_acts = self.homeo_timescale*self.avg_acts + (1-self.homeo_timescale)*self.lat_mean
-            gap = (self.avg_acts-self.homeo_target) / self.homeo_target
+            gap = (self.avg_acts-self.homeo_target)
             self.adathresh += self.homeo_lr*gap
             
             curr_max_lat = lat.max()

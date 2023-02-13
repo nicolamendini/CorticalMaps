@@ -57,7 +57,7 @@ def run(X, model=None, stats=None, bar=True):
         stats['last_sample'] = 0
         stats['threshs'] = 0
         stats['max_lat'] = 0
-    stats['global_corr_beta'] = 1e-3
+    stats['global_corr_beta'] = 1e-4
     stats['avg_act_beta'] = 1e-3
     stats['rf_beta'] = 1e-3
     stats['strength_beta'] = 3e-3
@@ -85,19 +85,31 @@ def run(X, model=None, stats=None, bar=True):
 
         rand_idx = random.randint(0, X.shape[0]-1)
         sample = X[rand_idx:rand_idx+1]
+        
+        input_pad = config.KSIZE//2
+        sample = F.pad(sample,(input_pad,input_pad,input_pad,input_pad))
         sample = TF.rotate(sample, random.randint(0,360), interpolation=TF.InterpolationMode.BILINEAR)
-
-        w = sample.shape[-1]
-        totpad = w - config.CROPSIZE
-        randpad = torch.randint(totpad, (2,))
-        sample = sample[:,:,randpad[0]:(config.CROPSIZE+randpad[0]),randpad[1]:(config.CROPSIZE+randpad[1])]
 
         if random.random() > 0.5:
             sample = sample.flip(-1)
+
+        new_w = sample.shape[-1]
+        cropsize = config.CROPSIZE + input_pad*2
+        crange = new_w-cropsize
+        cx = random.randint(0,crange)
+        cy = random.randint(0,crange)
+
+        #do not take samples outside of a circle inscripted in the image
+        while ((cx-crange/2)**2 + (cy-crange/2)**2) > (crange/2)**2:
+            cx = random.randint(0,crange)
+            cy = random.randint(0,crange)
+
+        sample = sample[:,:,cx:cx+cropsize,cy:cy+cropsize]
+        
+        if random.random() > 0.5:
+            sample = sample.flip(-1)
                         
-        sample = F.interpolate(sample, config.GRID_SIZE+(config.KSIZE-1)*config.EXPANSION, mode='bilinear')
-        #sample = torch.relu(sample)
-        #print(sample.min(), sample.max())
+        sample = F.interpolate(sample, cropsize*config.EXPANSION, mode='bilinear')
         
         if config.PRINT:
             plt.imshow(sample[0,0].cpu())
@@ -119,7 +131,7 @@ def run(X, model=None, stats=None, bar=True):
 
         if config.LEARNING:
         
-            loss = cosine_loss(raw_aff, lat_correlations, model)
+            loss = cosine_loss(raw_aff, lat, lat_correlations, model)
 
             if loss!=0:
                 optimiser.zero_grad()
