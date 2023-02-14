@@ -109,7 +109,9 @@ class CorticalMap(nn.Module):
         # computing the afferent response
         if not reco_flag:
             self.lat_mean *= 0
-            x_tiles = F.unfold(x, self.aff_cf_units, dilation=self.aff_cf_dilation)    
+            stride = round(1/self.aff_cf_dilation) if self.aff_cf_dilation<1 else 1 
+            dilation = 1 if self.aff_cf_dilation<1 else self.aff_cf_dilation
+            x_tiles = F.unfold(x, self.aff_cf_units, dilation=dilation, stride=stride)    
             x_tiles = x_tiles * self.aff_cf_envelope
             x_tiles = x_tiles.permute(2,0,1)
             raw_aff = torch.bmm(x_tiles, rfs)

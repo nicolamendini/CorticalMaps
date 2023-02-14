@@ -122,7 +122,7 @@ def get_cauchy(size, std):
 
 # Function to get a set of Orientation detectors of all angles and all phases
 # Result has shape [phases, angles, W, W]
-def get_orientation_detectors(size, wavelength, psteps=4, steps=50):
+def get_orientation_detectors(size, wavelength, psteps=2, steps=50):
     
     ANGLE_END = torch.pi/2
     detectors = torch.zeros(steps, psteps, size, size)
@@ -137,9 +137,8 @@ def get_orientation_detectors(size, wavelength, psteps=4, steps=50):
             # using gabor filters to detect the fourier-like components
             detectors[a,p] = get_gabor(size, float(angles[a]), wavelength, float(phases[p]), 1)[None,None]
 
-    # removing borders to make them circular and normalising
-    detectors *= get_circle(size, size/2)
-    detectors /= torch.sqrt((detectors**2).sum([-1,-2], keepdim=True))
+    # no normalisation needed cause that's already done by the get_gabor function!
+
     return detectors
 
 
@@ -293,7 +292,7 @@ def count_pinwheels(orientations, grid_size, size, window=7, angsteps=100, thres
     
     pinwheels = torch.zeros(grid_size-size*2+1, grid_size-size*2+1)
     ang_range = torch.linspace(0, torch.pi/2, angsteps)
-    laplacian = -get_log(5,0.2)
+    laplacian = -get_log(5,0.25)
     
     # repeat for progressive angles at given steps
     for i in range(angsteps):
@@ -373,16 +372,17 @@ def get_gini(X_eff):
     return gini
 
 # function to get the orientation map for plotting out of a set of receptive fields
-def get_orientations(rfs, KSIZE, GRID_SIZE, ONOFF=True, PSTEPS=2, DET_STEPS=15):
+def get_orientations(rfs, ksize, grid_size, on_off_flag=True, det_steps=2, discreteness=15):
     
     # get the gabor detectors
-    detectors = get_orientation_detectors(KSIZE,KSIZE,PSTEPS,DET_STEPS).to(rfs.device)
-    rfs = rfs / torch.sqrt((rfs**2).sum(1, keepdim=True))
-    rfs = rfs.view(-1, 2, KSIZE, KSIZE)
+    detectors = get_orientation_detectors(ksize,ksize,det_steps,discreteness).to(rfs.device)
+    #rfs = rfs / torch.sqrt((rfs**2).sum(1, keepdim=True))
+    rfs = rfs / rfs.sum(1, keepdim=True)
+    rfs = rfs.view(-1, 2, ksize, ksize)
 
     # decide whether to measure the on or off channel
     affinity = 0
-    if ONOFF:
+    if on_off_flag:
         affinity = (rfs[:,0,None,None]*detectors[None]).sum([-1,-2])
     else:
         affinity = (rfs[:,1,None,None]*detectors[None]).sum([-1,-2])
@@ -393,8 +393,8 @@ def get_orientations(rfs, KSIZE, GRID_SIZE, ONOFF=True, PSTEPS=2, DET_STEPS=15):
 
     # the orientations are the gabor filters which responses had the highest magnitude
     orientations = magnitudes.max(1)[1]
-    phases = phases.gather(1, orientations[:,None]).view(GRID_SIZE,GRID_SIZE)
-    orientations = orientations.view(GRID_SIZE,GRID_SIZE) / orientations.max() * torch.pi
+    phases = phases.gather(1, orientations[:,None]).view(grid_size,grid_size)
+    orientations = orientations.view(grid_size,grid_size) / orientations.max() * torch.pi
     return orientations, phases
     
 # function to return some random indices to create random sparse connections

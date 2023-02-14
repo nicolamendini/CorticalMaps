@@ -108,8 +108,9 @@ def run(X, model=None, stats=None, bar=True):
         
         if random.random() > 0.5:
             sample = sample.flip(-1)
-                        
-        sample = F.interpolate(sample, cropsize*config.EXPANSION, mode='bilinear')
+                      
+        target_size = max(round(cropsize*config.EXPANSION), cropsize)
+        sample = F.interpolate(sample, target_size, mode='bilinear')
         
         if config.PRINT:
             plt.imshow(sample[0,0].cpu())
