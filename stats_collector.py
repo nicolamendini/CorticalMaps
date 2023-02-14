@@ -32,8 +32,10 @@ def run_print_stats(scalevals, kvals, X):
     for k in range(ktrials):
         for i in range(trials):
 
-            config.SCALE = scalevals[i]
-            config.DILATION = max(int(config.SCALE*2),1)
+            config.EXC_STD = scalevals[i]
+            config.SCALE = int(torch.round((config.EXC_STD)*5))
+            config.SCALE = config.SCALE+1 if config.SCALE%2==0 else config.SCALE
+            config.DILATION = max(int(config.EXC_STD*2),1)
             config.COMPRESSION = kvals[k]
 
             if config.COMPRESSION==1:
@@ -136,9 +138,9 @@ def collect():
     )
     X = X.float()
     
-    scalevals = torch.linspace(0,3,11)
+    scalevals = torch.linspace(0,3,7)
     scalevals[0] = 0.1
-    kvals = [1,2,3,4,5]
+    kvals = [1,2,3,4]
     print(scalevals)
 
     ensemble, affinities, compressib, maps, ratios, avg_peaks, spectra = run_print_stats(scalevals, kvals,X)

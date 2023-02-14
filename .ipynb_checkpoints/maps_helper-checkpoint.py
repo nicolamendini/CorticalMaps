@@ -289,11 +289,11 @@ def get_typical_dist_fourier(orientations, grid_size, size, match_std=2, precisi
 
 
 # Function to count the pinwheels of a map
-def count_pinwheels(orientations, grid_size, size, window=7, angsteps=100, thresh=5):
+def count_pinwheels(orientations, grid_size, size, window=7, angsteps=100, thresh=1):
     
     pinwheels = torch.zeros(grid_size-size*2+1, grid_size-size*2+1)
     ang_range = torch.linspace(0, torch.pi/2, angsteps)
-    laplacian = -get_log(3,0.1)
+    laplacian = -get_log(5,0.2)
     
     # repeat for progressive angles at given steps
     for i in range(angsteps):
