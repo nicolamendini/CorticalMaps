@@ -61,6 +61,7 @@ class CorticalMap(nn.Module):
         init_rfs /= init_rfs.sum(1, keepdim=True)
         self.rfs = nn.Parameter(init_rfs) 
                 
+        # and the lateral inhibitory correlation weights
         init_lat = torch.ones(1,1,lat_cf_units,lat_cf_units)
         init_lat = init_lat.view(1,lat_cf_units**2,1).repeat(sheet_units**2,1,1)
         init_lat /= init_lat.sum(1, keepdim=True)
@@ -128,6 +129,7 @@ class CorticalMap(nn.Module):
         if self.lat_base_corr<1:
             neg_w = lat_w * neg_w
             neg_w /= (neg_w.sum(1, keepdim=True))
+            
         else:
             neg_w = neg_w.expand(self.sheet_units**2,-1,-1)
                 
@@ -165,6 +167,7 @@ class CorticalMap(nn.Module):
 
                 # learn the lateral correlations
                 self.lat_mean /= self.lat_iters
+                
                 lat_tiles = F.pad(self.lat_mean, (pad,pad,pad,pad), value=self.homeo_target)
                 lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
                 lat_tiles = lat_tiles.permute(2,0,1)

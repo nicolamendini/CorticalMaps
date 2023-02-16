@@ -20,7 +20,7 @@ def run(X, model=None, stats=None, bar=True):
     lr = config.LR
     channels = X.shape[1]
     
-    csize = config.CSTD*5
+    csize = 5
     compression_kernel = get_radial_cos(csize,csize)**2 * get_circle(csize,csize/2)
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda()
@@ -87,7 +87,7 @@ def run(X, model=None, stats=None, bar=True):
         sample = X[rand_idx:rand_idx+1]
         
         input_pad = config.KSIZE//2
-        sample = F.pad(sample,(input_pad,input_pad,input_pad,input_pad))
+        #sample = F.pad(sample,(input_pad,input_pad,input_pad,input_pad))
         sample = TF.rotate(sample, random.randint(0,360), interpolation=TF.InterpolationMode.BILINEAR)
 
         if random.random() > 0.5:
@@ -100,9 +100,9 @@ def run(X, model=None, stats=None, bar=True):
         cy = random.randint(0,crange)
 
         #do not take samples outside of a circle inscripted in the image
-        while ((cx-crange/2)**2 + (cy-crange/2)**2) > (crange/2)**2:
-            cx = random.randint(0,crange)
-            cy = random.randint(0,crange)
+        #while ((cx-crange/2)**2 + (cy-crange/2)**2) > (crange/2)**2:
+        #    cx = random.randint(0,crange)
+        #    cy = random.randint(0,crange)
 
         sample = sample[:,:,cx:cx+cropsize,cy:cy+cropsize]
         
