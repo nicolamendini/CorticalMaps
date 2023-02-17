@@ -7,31 +7,27 @@ import numpy as np
 # ---------------------------------
 
 RET_LOG_STD = 1
-RET_STRENGTH = 1
-LGN_STRENGTH = 0 
 LGN_LOG_STD = 1
 HARDGC = True
-CG_STD = 4
-CG_SCALER = 0.4
-CG_EPS = 0.01
-SAME_MEAN = True
+CG_EPS = 1
+SATURATION = 0.4
+LGN_ITERS = 1
 
 # PARAMETER CONSOLE
 # ---------------------------------
 
 CROPSIZE = 38
-EXPANSION = 4
+EXPANSION = 2
 ITERS = 20
 K_STD = 4
-N_BATCHES = 40000
-LR = 1e-6
+N_BATCHES = 50000
+LR = 3e-7
 HOMEO_TIMESCALE = 0.999
 TARGET_LR_DEC = 1
-EXC_STD = 3
+EXC_STD = 1.5
 TARGET_STRENGTH = 0.8
-COMPRESSION = 3
-TARGET_ACT = 0.01
-BASE_CORR = 0
+TARGET_ACT = 0.02
+AFF_STRENGTH = 1
 
 # FLAGS
 # ---------------------------------
@@ -56,7 +52,8 @@ SCALE = round((EXC_STD)*5)
 SCALE = SCALE+1 if SCALE%2==0 else SCALE
 
 # dilation is twice the exc scale
-DILATION = int(EXC_STD*2)
+DILATION = max(int(EXC_STD*2),1)
+COMPRESSION = DILATION
 
 INH_SCALE = round(K_STD*EXPANSION/DILATION*5+1)
 INH_SCALE = INH_SCALE+1 if INH_SCALE%2==0 else INH_SCALE

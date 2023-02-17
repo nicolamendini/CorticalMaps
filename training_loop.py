@@ -20,13 +20,15 @@ def run(X, model=None, stats=None, bar=True):
     lr = config.LR
     channels = X.shape[1]
     
+    cstd = 0.9
     csize = 5
-    compression_kernel = get_radial_cos(csize,csize)**2 * get_circle(csize,csize/2)
+    compression_kernel = get_radial_cos(csize,csize*cstd)**2 * get_circle(csize,csize/2)
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda()
+    
+    device = X.device
                 
     if not model:
-        device = X.device
         model = CorticalMap(
             device,
             config.GRID_SIZE,
@@ -36,11 +38,11 @@ def run(X, model=None, stats=None, bar=True):
             config.DILATION,
             config.ITERS,
             config.TARGET_STRENGTH,
-            config.BASE_CORR,
             config.TARGET_ACT,
             config.HOMEO_TIMESCALE,
             config.SCALE,
-            config.INH_SCALE
+            config.INH_SCALE,
+            config.AFF_STRENGTH
         ).to(device)
     
     # if theres no stats dictionary
@@ -144,8 +146,9 @@ def run(X, model=None, stats=None, bar=True):
             # only do the full thing is you are printing or if you have to collect the stat
             if config.RECOPRINT or (config.RECO and not config.RECOPRINT):
 
-                compressed = F.conv2d(lat, compression_kernel, dilation=config.COMPRESSION)
-                reco = F.conv_transpose2d(compressed, compression_kernel, dilation=config.COMPRESSION)
+                pad = config.COMPRESSION*csize
+                compressed = F.conv2d(lat, compression_kernel, dilation=config.COMPRESSION, padding=pad)
+                reco = F.conv_transpose2d(compressed, compression_kernel, dilation=config.COMPRESSION, padding=pad)
                 #reco *= config.RECO_STRENGTH 
                             
                 with torch.no_grad():

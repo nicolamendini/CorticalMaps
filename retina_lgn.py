@@ -8,34 +8,38 @@ from maps_helper import *
 def retina_lgn(
     X,
     ret_log_std,
-    ret_strength,
-    lgn_strength,
     lgn_log_std,
     hard_gc,
     gcstd,
-    gc_scaler,
     gc_eps,
-    same_mean,
-    lgn_iters=10
+    saturation,
+    lgn_iters,
+    target_max=0.8
 ):
     
     # simulating the retinal processes
     ret_log_size = round(ret_log_std*13)
     ret_log_size = ret_log_size+1 if ret_log_size%2==0 else ret_log_size
     log = (get_log(ret_log_size, ret_log_std)  * get_circle(ret_log_size, ret_log_size)) 
-    log = log.to(X.device).type(torch.float16) * ret_strength
-    #log /= torch.sqrt((log**2).sum())
+    log = log.to(X.device).type(torch.float16)
     X = F.pad(X,(ret_log_size//2,ret_log_size//2,ret_log_size//2,ret_log_size//2), mode='reflect')
     X = torch.cat([F.conv2d(X, -log), F.conv2d(X, log)], dim=1)
-    X = torch.tanh(torch.relu(X))
+    X = torch.relu(X)
     
-    # applying another stage of on/off filtering if required
-    if lgn_strength:
+    # if on, ensures that each input units has the same average activation over time
+    X_mean = X.mean([0,2,3], keepdim=True)
+    X = X / (X_mean + 1e-10)
+    X_mean = X.mean([0,2,3])
+        
+    X_orig = X+0
+    X_mask = X>0
+    
+    if lgn_iters:
+        # applying another stage of on/off filtering if required
         lgn_log_size = round(lgn_log_std*13)
         lgn_log_size = lgn_log_size+1 if lgn_log_size%2==0 else lgn_log_size
         log = (get_log(lgn_log_size, lgn_log_std) * get_circle(lgn_log_size, lgn_log_size/2)) 
-        log = log.to(X.device).type(torch.float16) * lgn_strength
-        #log /= torch.sqrt((log**2).sum())
+        log = log.to(X.device).type(torch.float16)
         for i in range(lgn_iters):
             X = F.pad(X,(lgn_log_size//2,lgn_log_size//2,lgn_log_size//2,lgn_log_size//2), mode='reflect')
             X = torch.cat(
@@ -44,11 +48,11 @@ def retina_lgn(
                     F.conv2d(X[:,1][:,None], -log)
                 ], dim=1
             )
-            X = torch.tanh(torch.relu(X))
-
-    # saturating the activations
-    X_orig = X+0
-    X_mask = X>0
+            
+            X = torch.relu(X)
+            X_mean = X.mean([0,2,3], keepdim=True)
+            X = X / (X_mean + 1e-10)
+            X_mean = X.mean([0,2,3])
 
     # LGN stages. Applying gain control as implemented in stevens 2008 GCAL
     if hard_gc:
@@ -63,16 +67,14 @@ def retina_lgn(
             localmax = localmax.sum(2, keepdim=True).view(1,2,X.shape[-1],X.shape[-1])
             X[i:i+1] /= (localmax + gc_eps) 
         
-        X = torch.tanh(X*gc_scaler)
-    X_cg = X + 0
-
-    # if on, ensures that each input units has the same average activation over time
-    if same_mean:
+        X = torch.tanh(X*saturation)
+        
+        # if on, ensures that each input units has the same average activation over time
         X_mean = X.mean([0,2,3], keepdim=True)
         X = X / (X_mean + 1e-10)
         X_mean = X.mean([0,2,3])
+        X = X / X.max() * target_max
         print(X_mean[0], X_mean[1], X.max(), X.min())
         
-    X /= X.max()
     
     return X, X_orig, X_mask
