@@ -14,7 +14,8 @@ def retina_lgn(
     gc_eps,
     saturation,
     lgn_iters,
-    target_max=0.8
+    target_max=0.8,
+    eps_thresh=1e-3
 ):
     
     # simulating the retinal processes
@@ -26,13 +27,13 @@ def retina_lgn(
     X = torch.cat([F.conv2d(X, -log), F.conv2d(X, log)], dim=1)
     X = torch.relu(X)
     
+    X_orig = X[:]
+    
     # if on, ensures that each input units has the same average activation over time
     X_mean = X.mean([0,2,3], keepdim=True)
     X = X / (X_mean + 1e-10)
     X_mean = X.mean([0,2,3])
         
-    X_orig = X+0
-    X_mask = X>0
     
     if lgn_iters:
         # applying another stage of on/off filtering if required
@@ -49,10 +50,12 @@ def retina_lgn(
                 ], dim=1
             )
             
-            X = torch.relu(X)
+            X = torch.relu(X-eps_thresh)
             X_mean = X.mean([0,2,3], keepdim=True)
             X = X / (X_mean + 1e-10)
             X_mean = X.mean([0,2,3])
+            
+    X_mask = X>0
 
     # LGN stages. Applying gain control as implemented in stevens 2008 GCAL
     if hard_gc:
