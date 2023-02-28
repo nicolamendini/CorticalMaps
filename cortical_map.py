@@ -86,7 +86,7 @@ class CorticalMap(nn.Module):
         self.homeo_timescale = homeo_timescale
         self.homeo_target = homeo_target
         self.lat_strength_target = lat_strength_target
-        self.strength_lr = 1e-3
+        self.strength_lr = 1e-2
         self.afferent_strength = afferent_strength
                                 
     def forward(self, x, reco_flag=False, learning_flag=True, print_flag=False):
@@ -110,9 +110,8 @@ class CorticalMap(nn.Module):
         # computing the afferent response
         if not reco_flag:
             self.lat_mean *= 0
-            stride = round(1/self.aff_cf_dilation) if self.aff_cf_dilation<1 else 1 
-            dilation = 1 if self.aff_cf_dilation<1 else self.aff_cf_dilation
-            x_tiles = F.unfold(x, self.aff_cf_units, dilation=dilation, stride=stride)    
+            dilation = 1 if self.aff_cf_dilation<1 else round(self.aff_cf_dilation)
+            x_tiles = F.unfold(x, self.aff_cf_units, dilation=dilation)    
             x_tiles = x_tiles * self.aff_cf_envelope
             x_tiles = x_tiles.permute(2,0,1)
             raw_aff = torch.bmm(x_tiles, rfs)
@@ -127,6 +126,7 @@ class CorticalMap(nn.Module):
             print(aff.max()*self.afferent_strength)
             
         lat = torch.relu(aff*self.afferent_strength - self.adathresh)
+        #lat = lat / (lat.max() + 1e-7) * self.lat_strength_target
                         
         neg_w = lat_w * neg_w
         neg_w /= (neg_w.sum(1, keepdim=True))
@@ -155,8 +155,9 @@ class CorticalMap(nn.Module):
             lat = lat-lat_neg
             
             # subtracting the thresholds and applying the nonlinearities
-            lat = torch.relu(lat*self.strength + aff*self.afferent_strength - self.adathresh)
-            lat = torch.tanh(lat)      
+            lat = lat*self.strength + aff*self.afferent_strength - self.adathresh
+            #lat = torch.sigmoid(lat*4-5)
+            lat = torch.tanh(torch.relu(lat))
             
             self.lat_mean += lat
             

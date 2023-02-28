@@ -14,6 +14,14 @@ import torchvision.transforms.functional as TF
 from matplotlib.collections import LineCollection
 
 
+# function to make a number odd or even
+def oddenise(number):
+    new_number = number+1 if number%2==0 else number
+    return new_number
+def evenise(number):
+    new_number = number if number%2==0 else number+1
+    return new_number
+    
 # Function to compute the Laplacian Of Gaussian Operator
 def get_log(size, std):
     
@@ -224,13 +232,12 @@ def get_gabor(size, theta, Lambda, psi, gamma):
 # Function to measure the typical distance between iso oriented map domains
 # Samples a certain number of orientations given by 'precision' and returns 
 # the histograms of the gaussian doughnuts that were used to fit the curve together with the peak
-def get_typical_dist_fourier(orientations, grid_size, size, match_std=2, precision=10, mask=0):
+def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10, mask=1):
     
     # R is the size of the map after removing some padding size, must be odd    
-    R = grid_size//2 - size
-    if grid_size%2==0:
-        grid_size += 1
-    
+    grid_size = orientations.shape[-1]
+    R = (grid_size - border_cut)//2
+            
     spectrum = torch.zeros(grid_size,grid_size)
     avg_spectrum = torch.zeros(grid_size,grid_size)
     avg_peak = 0
@@ -246,7 +253,8 @@ def get_typical_dist_fourier(orientations, grid_size, size, match_std=2, precisi
         # this is needed to get a cleaner ring
         output = torch.cos(orientations - ang_range[i])**2
         output -= torch.cos(orientations - ang_range[i] + torch.pi/2)**2
-        spectrum[size:-size,size:-size] = output[size:-size+1,size:-size+1].cpu()
+        spectrum[border_cut:-border_cut+1,border_cut:-border_cut+1] = \
+            output[border_cut:-border_cut+1,border_cut:-border_cut+1].cpu()
              
         # compute the fft and mask it to remove the central bias
         af = torch.fft.fft2(spectrum)
@@ -281,16 +289,17 @@ def get_typical_dist_fourier(orientations, grid_size, size, match_std=2, precisi
         avg_hist += hist
         
     avg_peak /= precision
-    spectrum /= precision
+    avg_spectrum /= precision
     avg_hist /= precision
     
     return avg_peak, avg_spectrum, avg_hist
 
 
 # Function to count the pinwheels of a map
-def count_pinwheels(orientations, grid_size, size, window=7, angsteps=100, thresh=1):
+def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1):
     
-    pinwheels = torch.zeros(grid_size-size*2+1, grid_size-size*2+1)
+    grid_size = orientations.shape[-1]
+    pinwheels = torch.zeros(grid_size-border_cut*2+1, grid_size-border_cut*2+1)
     ang_range = torch.linspace(0, torch.pi/2, angsteps)
     laplacian = -get_log(5,0.25)
     
@@ -304,7 +313,7 @@ def count_pinwheels(orientations, grid_size, size, window=7, angsteps=100, thres
         output = torch.relu(output)
         # average over many to reinforce discontinuities that are present for each angle
         # which hopefully will be pinwheels
-        pinwheels += output[size:-size+1,size:-size+1]
+        pinwheels += output[border_cut:-border_cut+1,border_cut:-border_cut+1]
         
     pinwheels /= angsteps
     
@@ -318,8 +327,8 @@ def count_pinwheels(orientations, grid_size, size, window=7, angsteps=100, thres
     mask[1:-1, 1:-1] -= torch.ones(window-2, window-2)
     skip = False
 
-    for x in range(grid_size-size*2):
-        for y in range(grid_size-size*2):
+    for x in range(grid_size-border_cut*2):
+        for y in range(grid_size-border_cut*2):
         
             curr_slice = pinwheels_copy[x:x+window, y:y+window]
         

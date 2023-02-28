@@ -14,7 +14,7 @@ def retina_lgn(
     gc_eps,
     saturation,
     lgn_iters,
-    target_max=0.8,
+    target_max=0.85,
     eps_thresh=1e-3
 ):
     
@@ -25,7 +25,7 @@ def retina_lgn(
     log = log.to(X.device).type(torch.float16)
     X = F.pad(X,(ret_log_size//2,ret_log_size//2,ret_log_size//2,ret_log_size//2), mode='reflect')
     X = torch.cat([F.conv2d(X, -log), F.conv2d(X, log)], dim=1)
-    X = torch.relu(X)
+    X = torch.relu(X-eps_thresh)
     
     X_orig = X[:]
     
@@ -50,7 +50,7 @@ def retina_lgn(
                 ], dim=1
             )
             
-            X = torch.relu(X-eps_thresh)
+            X = torch.relu(X)
             X_mean = X.mean([0,2,3], keepdim=True)
             X = X / (X_mean + 1e-10)
             X_mean = X.mean([0,2,3])

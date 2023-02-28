@@ -20,9 +20,10 @@ def run(X, model=None, stats=None, bar=True):
     lr = config.LR
     channels = X.shape[1]
     
-    cstd = 0.9
-    csize = 5
-    compression_kernel = get_radial_cos(csize,csize*cstd)**2 * get_circle(csize,csize/2)
+    cstd = 1*config.COMPRESSION
+    csize = 5*cstd
+    csize = csize+1 if csize%2==0 else csize
+    compression_kernel = get_radial_cos(csize,csize)**2 * get_circle(csize,csize/2)
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda()
     
@@ -49,6 +50,7 @@ def run(X, model=None, stats=None, bar=True):
     if not stats:
         stats = {}
         stats['rf_affinity'] = 0
+        stats['reco_rf_affinity'] = 0
         stats['avg_acts'] = torch.zeros((1,1,config.GRID_SIZE,config.GRID_SIZE), device=device) + config.TARGET_ACT
         stats['global_corr'] = torch.zeros(
             (config.CORR_SAMPLES,config.CORR_SAMPLES,config.GRID_SIZE,config.GRID_SIZE), 
@@ -111,7 +113,9 @@ def run(X, model=None, stats=None, bar=True):
         if random.random() > 0.5:
             sample = sample.flip(-1)
                       
-        target_size = max(round(cropsize*config.EXPANSION), cropsize)
+        target_size = config.GRID_SIZE
+        # tha padding should not go below an expansion of 1
+        target_size += input_pad*2*max(round(config.EXPANSION),1)
         sample = F.interpolate(sample, target_size, mode='bilinear')
         
         if config.PRINT:
@@ -147,9 +151,16 @@ def run(X, model=None, stats=None, bar=True):
             if config.RECOPRINT or (config.RECO and not config.RECOPRINT):
 
                 pad = config.COMPRESSION*csize
-                compressed = F.conv2d(lat, compression_kernel, dilation=config.COMPRESSION, padding=pad)
-                reco = F.conv_transpose2d(compressed, compression_kernel, dilation=config.COMPRESSION, padding=pad)
-                #reco *= config.RECO_STRENGTH 
+                #compressed = F.conv2d(lat, compression_kernel, dilation=config.COMPRESSION, padding=pad)
+                #compressed = F.pad(lat,(pad,pad,pad,pad))
+                #compressed = F.interpolate(lat, lat.shape[-1]//config.COMPRESSION, mode='nearest')
+                indices = torch.arange(lat.shape[-1]//config.COMPRESSION)*config.COMPRESSION
+                compressed = lat[0,0,indices[:,None],indices[None]][None,None]
+                reco = F.conv_transpose2d(compressed, compression_kernel, stride=config.COMPRESSION, padding=csize//2)
+                gap = lat.shape[-1] - reco.shape[-1]
+                reco = F.pad(reco, (0,gap,0,gap))
+                #print(reco.shape, lat.shape, gap)
+                reco *= config.COMPRESSION**2 
                             
                 with torch.no_grad():
                     _,lat_reco,_,_ = model(
@@ -160,13 +171,10 @@ def run(X, model=None, stats=None, bar=True):
                     )
 
                 norm = torch.sqrt((lat_reco**2).sum() * (lat**2).sum())
-                diff = (lat * lat_reco).sum() / (norm + 1e-11)
-                                
+                diff = (lat * lat_reco).sum() / (norm + 1e-11)        
                 if diff:
-                    stats['avg_reco'] = stats['avg_reco']*(1-stats['rf_beta']) + stats['rf_beta']*diff
-    
-                #reco_max_lat = lat_reco.max()
-                #config.RECO_STRENGTH -= (reco_max_lat - config.RECO_TARGET_STRENGTH)*stats['strength_beta']
+                    reco_max_lat = lat_reco.max()
+                    stats['avg_reco'] = (1-stats['rf_beta'])*stats['avg_reco'] + stats['rf_beta']*diff
                 stats['reco_tracker'][idx] = stats['avg_reco']
 
                 if config.RECOPRINT:
@@ -180,11 +188,12 @@ def run(X, model=None, stats=None, bar=True):
                     plt.subplot(2,2,3)
                     plt.imshow(lat[0,0].cpu())
                     plt.subplot(2,2,4)
-                    plt.imshow(((lat_reco).abs())[0,0].cpu())
+                    plt.imshow(((lat_reco-lat).abs())[0,0].cpu())
+                    plt.show()
+                    plt.imshow(compressed[0,0].cpu())
                     plt.show()
                     print('reco max: ', reco.max())
                     print('reco: ', lat_reco.max(), 'lat: ', lat.max())
-                    print('score: ', diff)
                     break
                     
         if config.PRINT:
@@ -198,20 +207,33 @@ def run(X, model=None, stats=None, bar=True):
             rfs_det = model.get_rfs()
             aff_flat = raw_aff.detach().view(-1)
             norms = torch.sqrt((rfs_det**2).sum(1) * (x_tiles**2).sum(2)).view(-1)
-            aff_flat = aff_flat * lat.view(-1) / (norms * lat.sum() + 1e-11)
-            rf_affinity = aff_flat.sum()
+            cos_sims = aff_flat * lat.view(-1) / (norms * lat.sum() + 1e-11)
+            #reco_cos_sims = aff_flat * lat_reco.view(-1) / (norms * lat_reco.sum() + 1e-11)
+            rf_affinity = cos_sims.sum()
+            #reco_rf_affinity = reco_cos_sims.sum()
             stats['rf_affinity'] = (1-stats['rf_beta'])*stats['rf_affinity'] + stats['rf_beta']*rf_affinity
+            #stats['reco_rf_affinity'] = (1-stats['rf_beta'])*stats['reco_rf_affinity'] + \
+            #    stats['rf_beta']*reco_rf_affinity
             stats['affinity_tracker'][idx] = stats['rf_affinity']
             
             gs = config.GRID_SIZE
             cs = config.CORR_SAMPLES
             factors = lat[0,0,gs//2-cs//2:gs//2+cs//2+1,gs//2-cs//2:gs//2+cs//2+1]
             factors = factors.view(cs,cs,1,1)
-            stats['global_corr'] = stats['global_corr']*(1-stats['global_corr_beta']) \
-                + lat*factors*stats['global_corr_beta']
+            stats['global_corr'] = stats['global_corr']*(1-stats['global_corr_beta']) + \
+                lat*factors*stats['global_corr_beta']
         if bar:
             progress_bar.set_description(\
-                f"avg affinity: {format(stats['rf_affinity'],'.3f')} avg act: {format(avg_acts_mean,'.3f')} max act: {format(stats['max_lat'],'.3f')} reco: {format(stats['avg_reco'],'.3f')} threshs: {format(stats['threshs'],'.3f')} LR: {format(lr,'.6f')} ")
+                "affinity: {:.3f} reco cos: {:.3f} ensemble: {:.3f} avg act: {:.3f} max act: {:.3f} threshs: {:.3f} LR: {:.7f}".format\
+            (
+                stats['rf_affinity'], 
+                stats['avg_reco'], 
+                stats['rf_affinity']*stats['avg_reco'],
+                avg_acts_mean, 
+                stats['max_lat'], 
+                stats['threshs'], 
+                lr
+            ))
             progress_bar.update()
         
         scheduler.step()
