@@ -3,3 +3,4 @@ __pycache__/
 versions/
 the-small-norb-dataset-v10/
 fruit_dataset/
+.ipynb_checkpoint/
