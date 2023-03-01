@@ -232,7 +232,7 @@ def get_gabor(size, theta, Lambda, psi, gamma):
 # Function to measure the typical distance between iso oriented map domains
 # Samples a certain number of orientations given by 'precision' and returns 
 # the histograms of the gaussian doughnuts that were used to fit the curve together with the peak
-def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10, mask=1):
+def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10, mask=1, smoothing_std=0):
     
     # R is the size of the map after removing some padding size, must be odd    
     grid_size = orientations.shape[-1]
@@ -256,6 +256,16 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10
         spectrum[border_cut:-border_cut+1,border_cut:-border_cut+1] = \
             output[border_cut:-border_cut+1,border_cut:-border_cut+1].cpu()
              
+        # apply a gaussian envelope to avoid border effects if needed
+        if smoothing_std:
+            envelope = get_radial_cos(spectrum.shape[-1], smoothing_std)[0,0] 
+            envelope *= get_circle(spectrum.shape[-1], smoothing_std/2)[0,0]
+            envelope /= envelope.max()
+            spectrum *= envelope
+            
+        #plt.imshow(spectrum)
+        #plt.show()
+            
         # compute the fft and mask it to remove the central bias
         af = torch.fft.fft2(spectrum)
         af = abs(torch.fft.fftshift(af))
@@ -318,7 +328,7 @@ def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1):
     pinwheels /= angsteps
     
     # apply a threshold to remove the noise
-    pinwheels = torch.relu(pinwheels - thresh) > 0
+    pinwheels = torch.relu(pinwheels - 1) > 0
     
     # use a sliding window to count how many distinct discontinuities are found
     count = 0

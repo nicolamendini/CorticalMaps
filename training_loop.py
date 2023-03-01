@@ -19,14 +19,13 @@ def run(X, model=None, stats=None, bar=True):
     
     lr = config.LR
     channels = X.shape[1]
-    
-    cstd = 1*config.COMPRESSION
-    csize = 5*cstd
+    cstd = 0.8*config.COMPRESSION*5
+    csize = round(cstd)
     csize = csize+1 if csize%2==0 else csize
-    compression_kernel = get_radial_cos(csize,csize)**2 * get_circle(csize,csize/2)
+    border_trim = csize//2
+    compression_kernel = get_radial_cos(csize,cstd)**2 * get_circle(csize,cstd/2)
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda()
-    
     device = X.device
                 
     if not model:
@@ -151,15 +150,11 @@ def run(X, model=None, stats=None, bar=True):
             if config.RECOPRINT or (config.RECO and not config.RECOPRINT):
 
                 pad = config.COMPRESSION*csize
-                #compressed = F.conv2d(lat, compression_kernel, dilation=config.COMPRESSION, padding=pad)
-                #compressed = F.pad(lat,(pad,pad,pad,pad))
-                #compressed = F.interpolate(lat, lat.shape[-1]//config.COMPRESSION, mode='nearest')
                 indices = torch.arange(lat.shape[-1]//config.COMPRESSION)*config.COMPRESSION
                 compressed = lat[0,0,indices[:,None],indices[None]][None,None]
                 reco = F.conv_transpose2d(compressed, compression_kernel, stride=config.COMPRESSION, padding=csize//2)
                 gap = lat.shape[-1] - reco.shape[-1]
                 reco = F.pad(reco, (0,gap,0,gap))
-                #print(reco.shape, lat.shape, gap)
                 reco *= config.COMPRESSION**2 
                             
                 with torch.no_grad():
@@ -170,8 +165,11 @@ def run(X, model=None, stats=None, bar=True):
                         print_flag=config.PRINT
                     )
 
-                norm = torch.sqrt((lat_reco**2).sum() * (lat**2).sum())
-                diff = (lat * lat_reco).sum() / (norm + 1e-11)        
+                # trimming away the borders before computing the cosine similarity to avoid border effects
+                lat_reco_trimmed = lat_reco[:,:,border_trim:-border_trim,border_trim:-border_trim]
+                lat_trimmed = lat[:,:,border_trim:-border_trim,border_trim:-border_trim]
+                norm = torch.sqrt((lat_reco_trimmed**2).sum() * (lat_trimmed**2).sum())
+                diff = (lat_trimmed * lat_reco_trimmed).sum() / (norm + 1e-11)        
                 if diff:
                     reco_max_lat = lat_reco.max()
                     stats['avg_reco'] = (1-stats['rf_beta'])*stats['avg_reco'] + stats['rf_beta']*diff
@@ -188,12 +186,13 @@ def run(X, model=None, stats=None, bar=True):
                     plt.subplot(2,2,3)
                     plt.imshow(lat[0,0].cpu())
                     plt.subplot(2,2,4)
-                    plt.imshow(((lat_reco-lat).abs())[0,0].cpu())
+                    plt.imshow(((lat_reco).abs())[0,0].cpu())
                     plt.show()
                     plt.imshow(compressed[0,0].cpu())
                     plt.show()
                     print('reco max: ', reco.max())
                     print('reco: ', lat_reco.max(), 'lat: ', lat.max())
+                    print('score: ', diff)
                     break
                     
         if config.PRINT:

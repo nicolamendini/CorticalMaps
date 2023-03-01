@@ -41,8 +41,6 @@ LONGRUN_MODE = False
 # MINOR PARAMETERS
 # ---------------------------------
 
-RECO_STRENGTH = 1
-STRENGTH = 1
 LEARNING = True
 LR_DECAY = (1-1/N_BATCHES*np.log(TARGET_LR_DEC))
 
