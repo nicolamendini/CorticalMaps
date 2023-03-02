@@ -17,17 +17,18 @@ LGN_ITERS = 0
 # ---------------------------------
 
 CROPSIZE = 38
-EXPANSION = 3.3
-ITERS = 20
+EXPANSION = 2.67
+ITERS = 25
 K_STD = 4
-N_BATCHES = 1
+N_BATCHES = 50000
 LR = 1e-4
 HOMEO_TIMESCALE = 0.999
 TARGET_LR_DEC = 500
-EXC_STD = 1.67
+EXC_STD = 1.6
+# TARGET_STRENGTH = 0.8 is tested and proven to be the best
 TARGET_STRENGTH = 0.8
 TARGET_ACT = 0.01
-AFF_STRENGTH = 1
+INH_EXC_BALANCE = 0.55
 
 # FLAGS
 # ---------------------------------
@@ -49,7 +50,7 @@ SCALE = round((EXC_STD)*5)
 SCALE = SCALE+1 if SCALE%2==0 else SCALE
 
 # dilation is twice the exc scale
-DILATION = max(int(EXC_STD*3),1)
+DILATION = max(int(EXC_STD*2.5),1)
 COMPRESSION = round(EXPANSION*3/2)
 
 INH_SCALE = round(K_STD*EXPANSION/DILATION*5+1)

@@ -42,7 +42,7 @@ def run(X, model=None, stats=None, bar=True):
             config.HOMEO_TIMESCALE,
             config.SCALE,
             config.INH_SCALE,
-            config.AFF_STRENGTH
+            config.INH_EXC_BALANCE
         ).to(device)
     
     # if theres no stats dictionary
@@ -186,7 +186,7 @@ def run(X, model=None, stats=None, bar=True):
                     plt.subplot(2,2,3)
                     plt.imshow(lat[0,0].cpu())
                     plt.subplot(2,2,4)
-                    plt.imshow(((lat_reco).abs())[0,0].cpu())
+                    plt.imshow(((lat_reco-lat).abs())[0,0].cpu())
                     plt.show()
                     plt.imshow(compressed[0,0].cpu())
                     plt.show()

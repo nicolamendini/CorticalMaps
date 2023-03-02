@@ -29,7 +29,7 @@ class CorticalMap(nn.Module):
         homeo_timescale,
         exc_units,
         lat_cf_units,
-        afferent_strength
+        inh_exc_balance
     ):
         
         super().__init__()
@@ -51,7 +51,7 @@ class CorticalMap(nn.Module):
         lri_envelope *= 1 - inh_mask       
         lri_envelope *= inh_cutoff
         lri_envelope = lri_envelope.view(1,-1,1)
-        lri_envelope /= lri_envelope.sum()
+        lri_envelope /= lri_envelope.max()
         self.sre = sre.to(device)
         self.lri_envelope = lri_envelope.to(device)
         self.aff_cf_envelope = aff_cf_envelope.to(device)
@@ -87,12 +87,11 @@ class CorticalMap(nn.Module):
         self.homeo_target = homeo_target
         self.lat_strength_target = lat_strength_target
         self.strength_lr = 1e-2
-        self.afferent_strength = afferent_strength
+        self.inh_exc_balance = inh_exc_balance
                                 
     def forward(self, x, reco_flag=False, learning_flag=True, print_flag=False):
         
         # unpacking some values
-        neg_w = self.lri_envelope
         lat_correlations = 0
         raw_aff = 0
         x_tiles = 0
@@ -122,14 +121,8 @@ class CorticalMap(nn.Module):
         else:
             aff = x
             
-        if print_flag:
-            print(aff.max()*self.afferent_strength)
-            
-        lat = torch.relu(aff*self.afferent_strength - self.adathresh)
-        #lat = lat / (lat.max() + 1e-7) * self.lat_strength_target
-                        
-        neg_w = lat_w * neg_w
-        neg_w /= (neg_w.sum(1, keepdim=True))
+        aff = aff - self.adathresh
+        lat = torch.relu(aff)
                 
         # reaction diffusion
         for i in range(self.lat_iters):
@@ -149,14 +142,15 @@ class CorticalMap(nn.Module):
             pad = self.lat_cf_units//2*self.lat_cf_dilation
             lat_tiles = F.pad(lat, (pad,pad,pad,pad), value=self.homeo_target)
             lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
-            lat_tiles = lat_tiles.permute(2,0,1)
             
-            lat_neg = torch.bmm(lat_tiles, neg_w).view(1,1,self.sheet_units,self.sheet_units)
-            lat = lat-lat_neg
+            #print(lat_tiles.shape, neg_w.shape)
+            lat_tiles = lat_tiles * self.lri_envelope            
+            lat_tiles = lat_tiles.permute(2,0,1)
+            lat_neg = torch.bmm(lat_tiles, lat_w).view(1,1,self.sheet_units,self.sheet_units)
+            lat = lat*(1-self.inh_exc_balance)-lat_neg*self.inh_exc_balance
             
             # subtracting the thresholds and applying the nonlinearities
-            lat = lat*self.strength + aff*self.afferent_strength - self.adathresh
-            #lat = torch.sigmoid(lat*4-5)
+            lat = lat*self.strength + aff
             lat = torch.tanh(torch.relu(lat))
             
             self.lat_mean += lat
@@ -166,9 +160,9 @@ class CorticalMap(nn.Module):
 
                 # learn the lateral correlations
                 self.lat_mean /= self.lat_iters
-                
                 lat_tiles = F.pad(self.lat_mean, (pad,pad,pad,pad), value=self.homeo_target)
                 lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
+                lat_tiles = lat_tiles * self.lri_envelope 
                 lat_tiles = lat_tiles.permute(2,0,1)
                 weighted_lat_tiles = lat_tiles * self.lat_mean.view(self.sheet_units**2,1,1)
                 lat_correlations = torch.bmm(weighted_lat_tiles, self.lat_weights).sum()

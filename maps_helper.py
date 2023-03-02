@@ -306,7 +306,7 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10
 
 
 # Function to count the pinwheels of a map
-def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1):
+def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.05):
     
     grid_size = orientations.shape[-1]
     pinwheels = torch.zeros(grid_size-border_cut*2+1, grid_size-border_cut*2+1)
@@ -328,7 +328,7 @@ def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1):
     pinwheels /= angsteps
     
     # apply a threshold to remove the noise
-    pinwheels = torch.relu(pinwheels - 1) > 0
+    pinwheels = torch.relu(pinwheels - thresh) > 0
     
     # use a sliding window to count how many distinct discontinuities are found
     count = 0

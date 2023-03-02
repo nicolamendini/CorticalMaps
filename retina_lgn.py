@@ -14,7 +14,7 @@ def retina_lgn(
     gc_eps,
     saturation,
     lgn_iters,
-    target_max=0.85,
+    target_max=0.8,
     eps_thresh=1e-3
 ):
     

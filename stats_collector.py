@@ -92,7 +92,7 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
     max_grid_size = evenise(max_grid_size)
     
     plt.figure(figsize=(ktrials*5,15))
-    plt.suptitle('Varying Map Scale, for ' + str(ktrials) + ' different sparsity conditions K', fontsize=30)
+    plt.suptitle('Finding the optimal Map Scale, for ' + str(ktrials) + ' different sparsity conditions K', fontsize=30)
 
     for k in range(ktrials):
 
@@ -157,7 +157,7 @@ def collect():
     )
     X = X.float()
     
-    scalevals = torch.linspace(0,3,10)
+    scalevals = torch.linspace(0,3,16)
     scalevals[0] = 0.1
     kvals = [1,2,3,4]
     print(scalevals)
