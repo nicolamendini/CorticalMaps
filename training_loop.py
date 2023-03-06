@@ -32,7 +32,7 @@ def run(X, model=None, stats=None, bar=True):
         model = CorticalMap(
             device,
             config.GRID_SIZE,
-            config.KSIZE,
+            config.RF_SIZE,
             channels,
             config.EXPANSION,
             config.DILATION,
@@ -40,7 +40,7 @@ def run(X, model=None, stats=None, bar=True):
             config.TARGET_STRENGTH,
             config.TARGET_ACT,
             config.HOMEO_TIMESCALE,
-            config.SCALE,
+            config.EXC_SCALE,
             config.INH_SCALE,
             config.INH_EXC_BALANCE
         ).to(device)
@@ -84,12 +84,12 @@ def run(X, model=None, stats=None, bar=True):
         
         if idx%config.MAP_SAMPLS==0 and not config.PRINT:
             stats['map_tracker'][idx//config.MAP_SAMPLS] = get_orientations(
-                model.get_rfs(), config.KSIZE, config.GRID_SIZE)[0]
+                model.get_rfs(), config.RF_SIZE, config.GRID_SIZE)[0]
 
         rand_idx = random.randint(0, X.shape[0]-1)
         sample = X[rand_idx:rand_idx+1]
         
-        input_pad = config.KSIZE//2
+        input_pad = config.RF_SIZE//2
         #sample = F.pad(sample,(input_pad,input_pad,input_pad,input_pad))
         sample = TF.rotate(sample, random.randint(0,360), interpolation=TF.InterpolationMode.BILINEAR)
 

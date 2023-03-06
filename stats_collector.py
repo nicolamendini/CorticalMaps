@@ -64,7 +64,7 @@ def run_print_stats(scalevals, kvals, X, reps=3):
                 avg_peak, spectrum, avg_hist = get_typical_dist_fourier(
                     maps[r,k,i], 
                     config.MAPCHOP, 
-                    mask=kvals[-1]/kvals[k]+1, 
+                    #mask=kvals[-1]/kvals[k]+1, 
                     smoothing_std=config.GRID_SIZE
                 )
                 ratio = count / (config.GRID_SIZE-config.MAPCHOP*2)**2 * avg_peak**2            

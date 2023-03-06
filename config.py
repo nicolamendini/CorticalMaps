@@ -2,6 +2,7 @@
 # Parameters of the model
 
 import numpy as np
+from maps_helper import *
 
 # RETINA LGN PARAMETERS
 # ---------------------------------
@@ -17,14 +18,15 @@ LGN_ITERS = 0
 # ---------------------------------
 
 CROPSIZE = 38
-EXPANSION = 2.67
+EXPANSION = 3.34
 ITERS = 25
-K_STD = 4
+# relative to CROPSIZE [0,1]
+RF_STD = 4
 N_BATCHES = 50000
 LR = 1e-4
 HOMEO_TIMESCALE = 0.999
 TARGET_LR_DEC = 500
-EXC_STD = 1.6
+EXC_STD = 2
 # TARGET_STRENGTH = 0.8 is tested and proven to be the best
 TARGET_STRENGTH = 0.8
 TARGET_ACT = 0.01
@@ -46,26 +48,25 @@ LEARNING = True
 LR_DECAY = (1-1/N_BATCHES*np.log(TARGET_LR_DEC))
 
 # SCALES OF THE INTERACTIONS
-SCALE = round((EXC_STD)*5)
-SCALE = SCALE+1 if SCALE%2==0 else SCALE
+EXC_SCALE = round((EXC_STD)*5)
+EXC_SCALE = oddenise(EXC_SCALE)
 
 # dilation is twice the exc scale
 DILATION = max(int(EXC_STD*2.5),1)
 COMPRESSION = round(EXPANSION*3/2)
 
-INH_SCALE = round(K_STD*EXPANSION/DILATION*5+1)
-INH_SCALE = INH_SCALE+1 if INH_SCALE%2==0 else INH_SCALE
+INH_SCALE = round(RF_STD*EXPANSION/DILATION*5)
+INH_SCALE = oddenise(INH_SCALE)
 
-KSIZE = round(K_STD*5)
-KSIZE = KSIZE+1 if KSIZE%2==0 else KSIZE
+RF_SIZE = round(RF_STD*EXPANSION/round(EXPANSION)*5)
+RF_SIZE = oddenise(RF_SIZE)
 
 CORR_SAMPLES = 5
 STATS_FREQ = 1
 MAP_SAMPLS = 1000
-CSTD = 1
 MAPCHOP = 20
 MAPCHOP = 0 if EXPANSION<1 else MAPCHOP
-RECO = False if SCALE<1 else RECO
+RECO = False if EXC_SCALE<1 else RECO
 INPUT_SIZE = 96
 GRID_SIZE = round(CROPSIZE*EXPANSION)
-GRID_SIZE = GRID_SIZE if GRID_SIZE%2==0 else GRID_SIZE+1
+GRID_SIZE = evenise(GRID_SIZE)
