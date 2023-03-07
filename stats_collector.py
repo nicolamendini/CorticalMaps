@@ -9,6 +9,8 @@ import numpy as np
 import random
 import math
 import torchvision.transforms.functional as TF
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+import matplotlib.font_manager as fm
 
 import config
 from training_loop import *
@@ -28,22 +30,29 @@ def run_print_stats(scalevals, kvals, X, reps=3):
     affinities = torch.ones(reps,ktrials,trials)
     compressib = torch.ones(reps,ktrials,trials)
     maps = -torch.ones(reps,ktrials,trials,max_grid_size,max_grid_size)
-    spectra = torch.zeros(reps,ktrials,trials,max_grid_size+1,max_grid_size+1)
+    spectra = torch.zeros(reps,ktrials,trials,max_grid_size-1,max_grid_size-1)
     ratios = torch.ones(reps,ktrials,trials)
     avg_peaks = torch.ones(reps,ktrials,trials)
+    counts = torch.ones(reps,ktrials,trials)
+    hists = torch.ones(reps,ktrials,trials,max_grid_size//2-1)
 
     for r in range(reps):
         for k in range(ktrials):
             for i in range(trials):
 
                 config.EXC_STD = scalevals[i]
-                config.SCALE = int(torch.round((config.EXC_STD)*5))
-                config.SCALE = oddenise(config.SCALE)
+                config.EXC_SCALE = int(torch.round((config.EXC_STD)*5))
+                config.EXC_SCALE = oddenise(config.EXC_SCALE)
                 config.EXPANSION = kvals[k]/1.5
                 config.DILATION = kvals[k]
                 config.COMPRESSION = kvals[k]
                 config.GRID_SIZE = round(config.CROPSIZE*config.EXPANSION)
                 config.GRID_SIZE = evenise(config.GRID_SIZE)
+                config.RF_SIZE = round(config.RF_STD*config.EXPANSION/round(config.EXPANSION)*5)
+                config.RF_SIZE = oddenise(config.RF_SIZE)
+                # INH_SCALE is constant
+                #config.INH_SCALE = round(config.RF_STD*config.EXPANSION/config.DILATION*5)
+                #config.INH_SCALE = oddenise(config.INH_SCALE)
 
                 if config.COMPRESSION==1:
                     config.RECO = False
@@ -60,66 +69,139 @@ def run_print_stats(scalevals, kvals, X, reps=3):
                 start = (max_grid_size - config.GRID_SIZE)//2
                 maps[r,k,i,start:start+config.GRID_SIZE,start:start+config.GRID_SIZE] = stats['map_tracker'][-1]
 
-                count, pinwheels, pinwheels_copy = count_pinwheels(maps[r,k,i], config.MAPCHOP)
+                count, pinwheels, pinwheels_copy = count_pinwheels(stats['map_tracker'][-1], config.MAPCHOP)
                 avg_peak, spectrum, avg_hist = get_typical_dist_fourier(
                     maps[r,k,i], 
-                    config.MAPCHOP, 
-                    #mask=kvals[-1]/kvals[k]+1, 
+                    0, 
+                    mask=kvals[-1]/kvals[k]+1, 
                     smoothing_std=config.GRID_SIZE
                 )
                 ratio = count / (config.GRID_SIZE-config.MAPCHOP*2)**2 * avg_peak**2            
-                spectra[r,k,i,1:,1:] = spectrum
+                spectra[r,k,i] = spectrum
                 ratios[r,k,i] = ratio
                 avg_peaks[r,k,i] = avg_peak
+                counts[r,k,i] = count
+                hists[r,k,i] = avg_hist
         
-    print(affinities, compressib, ratios, avg_peaks)    
-    return affinities, compressib, maps, ratios, avg_peaks, spectra
+    print(affinities, compressib, ratios, avg_peaks, counts)    
+    return affinities, compressib, maps, ratios, avg_peaks, spectra, hists, counts
 
 # function to plot the results of many trials with different scale parameters
-def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra):
+def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists):
     
     trials = len(scalevals)
     ktrials = len(kvals)
     ensemble = affinities * compressib
     ensemble_mean = ensemble.mean(0)
     ensemble_err = ensemble.std(0)
-    best_maps_idxs = ensemble.permute(0,2,1).reshape(-1,ktrials).max(0, keepdim=True)[1][:,:,None,None]
-    best_maps_idxs = best_maps_idxs.expand(-1,-1,maps.shape[-1],maps.shape[-1])
-    best_maps = maps.permute(0,2,1,3,4).reshape(-1,ktrials,maps.shape[-1],maps.shape[-1]).gather(0,best_maps_idxs)
-    best_rings = spectra[:,:,:,1:,1:].permute(0,2,1,3,4).reshape(-1,ktrials,spectra.shape[-1]-1,spectra.shape[-1]-1)\
-        .gather(0,best_maps_idxs)
+    best_map_idxs_raw = ensemble.permute(0,2,1).reshape(-1,ktrials).max(0, keepdim=True)[1]
+    best_map_idxs_raw = best_map_idxs_raw[:,:,None,None]
+    
+    # selecting the best maps
+    best_map_idxs = best_map_idxs_raw.expand(-1,-1,maps.shape[-1],maps.shape[-1])
+    best_maps = maps.permute(0,2,1,3,4).reshape(-1,ktrials,maps.shape[-1],maps.shape[-1]).gather(0,best_map_idxs)
+    
+    # selecting the best spectra
+    best_map_idxs = best_map_idxs_raw.expand(-1,-1,spectra.shape[-1],spectra.shape[-1])
+    best_rings = spectra.permute(0,2,1,3,4).reshape(-1,ktrials,spectra.shape[-1],spectra.shape[-1])\
+        .gather(0,best_map_idxs)
     max_grid_size = round(config.CROPSIZE*kvals[-1]/1.5)
     max_grid_size = evenise(max_grid_size)
     
-    plt.figure(figsize=(ktrials*5,15))
+    rows = 4
+    
+    fig = plt.figure(figsize=(ktrials*5,rows*5))
     plt.suptitle('Finding the optimal Map Scale, for ' + str(ktrials) + ' different sparsity conditions K', fontsize=30)
 
     for k in range(ktrials):
 
-        plt.subplot(3,ktrials,1+k)
-        plt.xticks(fontsize=14)
-        plt.yticks(fontsize=14)
+        plt.subplot(rows,ktrials,1+k)
+        ax = plt.gca()
+        ax.set_box_aspect(1)
+        plt.subplots_adjust(hspace=0.4)
+        plt.xticks(fontsize=18)
+        plt.yticks(fontsize=18)
+        plt.locator_params(nbins=6)
         if k==0:
             plt.ylabel('Ensemble Score', fontsize=20)
-        plt.xlabel('Map Scale', fontsize=20)
-        plt.title('K = '+ str(kvals[k]), fontsize=20)
-        plt.ylim(0.50,0.90)
-        plt.errorbar(scalevals, ensemble_mean[k], 2*ensemble_err[k])
+            plt.xlabel('Map Scale', fontsize=20)
+        plt.title('K = '+ str(kvals[k]), fontsize=30)
+        plt.ylim(0.6,1)
+        plt.errorbar(scalevals, ensemble_mean[k], 2*ensemble_err[k], color='black')
+        
+    for k in range(ktrials):
 
+        plt.subplot(rows,ktrials,ktrials*1+1+k)
+        ax = plt.gca()
+        ax.set_box_aspect(1)
+        plt.subplots_adjust(left=0.1,
+                    bottom=0.1,
+                    right=0.9,
+                    top=0.9,
+                    wspace=0.3,
+                    hspace=0.3)
+        plt.xticks(fontsize=18)
+        plt.yticks(fontsize=18)
+        plt.locator_params(nbins=6)
+        if k==0:
+            plt.ylabel('Pinwheel Density', fontsize=20)
+            plt.xlabel('Map Scale', fontsize=20)
+        plt.ylim(0,10)
+        plt.errorbar(scalevals, ratios[:,k].mean(0), 2*ratios[:,k].std(0), color='black')
+        plt.plot(scalevals, [np.pi]*len(scalevals), linewidth=2, color='red')
+
+    ref_ax=0
+    best_idxs = ensemble.mean(0).max(1,keepdim=True)[1]
+    lambda_max = avg_peaks.mean(0).gather(1,best_idxs)
+    best_idxs = best_idxs[:,:,None].expand(-1,-1,max_grid_size//2-1)
+    hists_max = hists.mean(0).gather(1,best_idxs)
+    hists_max /= hists_max.max(2,keepdim=True)[0]
+    ticks_range = (-0.5,0.5,-0.5,0.5)
     for k in range(ktrials):
 
         map_to_plot = best_maps[0,k]
         map_to_plot[map_to_plot==-1] = torch.tensor(1.)/0.
-        plt.subplot(3,ktrials,ktrials+1+k)
-        plt.axis('off')
+        plt.subplot(rows,ktrials,ktrials*2+1+k)
+        plt.locator_params(nbins=6)
+        #plt.tick_params(left=False,bottom=False,labelleft=False,labelbottom=False)
+        if k==0:
+            plt.ylabel('Size (neurons)', fontsize=20)
+            plt.xlabel('Size (neurons)', fontsize=20)
+        plt.xticks(fontsize=18)
+        plt.yticks(fontsize=18)
+        plt.locator_params(nbins=5)
         plt.imshow(map_to_plot, cmap='hsv')
+        ref_ax = plt.gca()
+        fontprops = fm.FontProperties(size=20)
+        scalebar = AnchoredSizeBar(
+                            ref_ax.transData,
+                            lambda_max[k], '1 Λ', 'upper right', 
+                            pad=0.4,
+                            color='black',
+                            frameon=True,
+                            size_vertical=1,
+                            fontproperties=fontprops,
+                            borderpad=0.3,
+                            sep=5      
+                        )
+        ref_ax.add_artist(scalebar)
         
     for k in range(ktrials):
 
-        plt.subplot(3,ktrials,ktrials*2+1+k)
-        plt.axis('off')
-        plt.imshow(best_rings[0,k])
-
+        plt.subplot(rows,ktrials,ktrials*3+1+k)
+        plt.locator_params(nbins=6)
+        #plt.tick_params(left=False,bottom=False,labelleft=False,labelbottom=False)
+        if k==0:
+            plt.ylabel('Frequency (1/neurons)', fontsize=20)
+            plt.xlabel('Frequency (1/neurons)', fontsize=20)
+        plt.xticks(fontsize=18)
+        plt.yticks(fontsize=18)
+        ax = plt.gca()
+        ax.set_box_aspect(1)
+        ax.imshow(best_rings[0,k]**2, cmap='Greys', extent=ticks_range)
+        ax.plot(np.linspace(0,0.5,max_grid_size//2-1), hists_max[k,0]/4-0.5, linewidth=2, color='red')
+    
+    
     plt.savefig('sim_data/gcal_compressib/tradeoff.png')
     plt.savefig('sim_data/gcal_compressib/tradeoff.svg')
     
@@ -150,7 +232,7 @@ def collect():
         config.RET_LOG_STD,
         config.LGN_LOG_STD,
         config.HARDGC,
-        config.K_STD,
+        config.RF_STD,
         config.CG_EPS,
         config.SATURATION,
         config.LGN_ITERS
@@ -162,8 +244,8 @@ def collect():
     kvals = [1,2,3,4]
     print(scalevals)
 
-    affinities, compressib, maps, ratios, avg_peaks, spectra = run_print_stats(scalevals, kvals,X)
-    plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra)
+    affinities, compressib, maps, ratios, avg_peaks, spectra, hists, counts = run_print_stats(scalevals, kvals,X)
+    plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists)
 
     torch.save(affinities, 'sim_data/gcal_compressib/affinities.pt')
     torch.save(compressib, 'sim_data/gcal_compressib/compressib.pt')
@@ -171,3 +253,5 @@ def collect():
     torch.save(ratios, 'sim_data/gcal_compressib/ratios.pt')
     torch.save(avg_peaks, 'sim_data/gcal_compressib/avg_peaks.pt')
     torch.save(spectra, 'sim_data/gcal_compressib/spectra.pt')
+    torch.save(hists, 'sim_data/gcal_compressib/hists.pt')
+    torch.save(counts, 'sim_data/gcal_compressib/counts.pt')

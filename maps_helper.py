@@ -232,19 +232,19 @@ def get_gabor(size, theta, Lambda, psi, gamma):
 # Function to measure the typical distance between iso oriented map domains
 # Samples a certain number of orientations given by 'precision' and returns 
 # the histograms of the gaussian doughnuts that were used to fit the curve together with the peak
-def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10, mask=1, smoothing_std=0):
+def get_typical_dist_fourier(orientations, border_cut, match_std=1, precision=10, mask=1, smoothing_std=0):
     
-    # R is the size of the map after removing some padding size, must be odd    
-    grid_size = orientations.shape[-1]
-    R = (grid_size - border_cut)//2
-            
-    spectrum = torch.zeros(grid_size,grid_size)
-    avg_spectrum = torch.zeros(grid_size,grid_size)
+    # R is the size of the map after removing some padding size, must be odd thus 1 is subtractedS
+    grid_size = orientations.shape[-1] - 1
+    R = (grid_size - border_cut*2)
+
+    spectrum = 0
+    avg_spectrum = torch.zeros(R,R)
     avg_peak = 0
-    avg_hist = torch.zeros(grid_size//2)
+    hist = torch.zeros(R//2)
+    avg_hist = torch.zeros(R//2)
     ang_range = torch.linspace(0, torch.pi-torch.pi/precision, precision)
-    steps = torch.fft.fftfreq(grid_size)
-    hist = torch.zeros(grid_size//2)
+    steps = torch.fft.fftfreq(R)
 
     # average over a number of rings, given by precision
     for i in range(precision):
@@ -253,13 +253,12 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10
         # this is needed to get a cleaner ring
         output = torch.cos(orientations - ang_range[i])**2
         output -= torch.cos(orientations - ang_range[i] + torch.pi/2)**2
-        spectrum[border_cut:-border_cut+1,border_cut:-border_cut+1] = \
-            output[border_cut:-border_cut+1,border_cut:-border_cut+1].cpu()
+        spectrum = output[border_cut:-(border_cut+1),border_cut:-(border_cut+1)].cpu()
              
         # apply a gaussian envelope to avoid border effects if needed
         if smoothing_std:
-            envelope = get_radial_cos(spectrum.shape[-1], smoothing_std)[0,0] 
-            envelope *= get_circle(spectrum.shape[-1], smoothing_std/2)[0,0]
+            envelope = get_radial_cos(R, smoothing_std)[0,0] 
+            envelope *= get_circle(R, smoothing_std/2)[0,0]
             envelope /= envelope.max()
             spectrum *= envelope
             
@@ -268,14 +267,14 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10
             
         # compute the fft and mask it to remove the central bias
         af = torch.fft.fft2(spectrum)
-        af = abs(torch.fft.fftshift(af))
+        af = torch.abs(torch.fft.fftshift(af))
         af *= ~get_circle(af.shape[-1], mask)[0,0]
         
         # use progressively bigger doughnut funtions to find the most active radius
         # which will correspond to the predominant frequency
-        for r in range(grid_size//2):
+        for r in range(R//2):
     
-            doughnut = get_doughnut(grid_size, r, match_std)
+            doughnut = get_doughnut(R, r, match_std)
             prod = af * doughnut
             hist[r] = (prod).sum()
                         
@@ -283,7 +282,7 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10
         peak_interpolate = steps[argmax_p]
         
         # interpolate between the peak value and its two neighbours to get a more accurate estimate
-        if argmax_p+1<grid_size//2:
+        if argmax_p+1<R//2:
             base = hist[argmax_p-2]
             a,b,c = (hist[argmax_p-1]-base).abs(), (hist[argmax_p]-base).abs(), (hist[argmax_p+1]-base).abs()
             tot = a+b+c
@@ -306,12 +305,13 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=2, precision=10
 
 
 # Function to count the pinwheels of a map
-def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.05):
+def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1, ksize=5):
     
     grid_size = orientations.shape[-1]
-    pinwheels = torch.zeros(grid_size-border_cut*2+1, grid_size-border_cut*2+1)
+    final_size = grid_size-border_cut*2-1
+    pinwheels = torch.zeros(final_size, final_size)
     ang_range = torch.linspace(0, torch.pi/2, angsteps)
-    laplacian = -get_log(5,0.25)
+    laplacian = -get_log(ksize,0.25)
     
     # repeat for progressive angles at given steps
     for i in range(angsteps):
@@ -323,7 +323,7 @@ def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.0
         output = torch.relu(output)
         # average over many to reinforce discontinuities that are present for each angle
         # which hopefully will be pinwheels
-        pinwheels += output[border_cut:-border_cut+1,border_cut:-border_cut+1]
+        pinwheels += output[border_cut:-(border_cut+1),border_cut:-(border_cut+1)]
         
     pinwheels /= angsteps
     
@@ -337,8 +337,8 @@ def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.0
     mask[1:-1, 1:-1] -= torch.ones(window-2, window-2)
     skip = False
 
-    for x in range(grid_size-border_cut*2):
-        for y in range(grid_size-border_cut*2):
+    for x in range(final_size):
+        for y in range(final_size):
         
             curr_slice = pinwheels_copy[x:x+window, y:y+window]
         
@@ -391,7 +391,7 @@ def get_gini(X_eff):
     return gini
 
 # function to get the orientation map for plotting out of a set of receptive fields
-def get_orientations(rfs, ksize, grid_size, on_off_flag=True, det_steps=2, discreteness=15):
+def get_orientations(rfs, ksize, grid_size, on_off_flag=True, det_steps=2, discreteness=30):
     
     # get the gabor detectors
     detectors = get_orientation_detectors(ksize,ksize,det_steps,discreteness).to(rfs.device)
@@ -444,7 +444,7 @@ def get_norm_loss(weights):
     w_det = weights.detach()
     w_sum = w_det.sum(1, keepdim=True)
     # similar to l2 loss in that the decay is proportional to the weight but has target norn 1
-    w_norm = (((w_sum - 1) * w_det * w_det.shape[1]) * weights).sum()
+    w_norm = (torch.relu(w_sum - 1) * w_det * weights).sum() * w_det.shape[1]
     return w_norm
 
 # ensemble loss
