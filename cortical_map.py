@@ -152,7 +152,7 @@ class CorticalMap(nn.Module):
             # subtracting the thresholds and applying the nonlinearities
             lat = lat*self.strength + aff
             lat = torch.tanh(torch.relu(lat))
-            
+        
             self.lat_mean += lat
             
         if not reco_flag:

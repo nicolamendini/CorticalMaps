@@ -41,24 +41,30 @@ class CorticalMap(nn.Module):
         inh_mask = get_radial_cos(lat_cf_units, exc_units/lat_cf_dilation)**2
         inh_mask *= get_circle(lat_cf_units, exc_units/(2*lat_cf_dilation))
         
-        self.max_rad = exc_units*4
-        max_rad_mask = get_circle(self.max_rad, self.max_rad/2)
+        self.max_rad = oddenise(exc_units*2+1)
+        max_rad_mask = get_circle(self.max_rad, self.max_rad/2).view(1,-1,1)
         self.max_rad_mask = max_rad_mask.to(device)
+        max_gauss = get_radial_cos(self.max_rad, self.max_rad) 
+        max_gauss = max_gauss.view(1,-1,1) * max_rad_mask
+        self.max_gauss = max_gauss.to(device)
+        #plt.imshow(max_rad_mask.view(self.max_rad,self.max_rad))
+        #plt.show()
         
         # defining the lateral interaction envelopes
         aff_cf_envelope = get_radial_cos(aff_cf_units,aff_cf_units)**2 * aff_cutoff
         aff_cf_envelope /= aff_cf_envelope.max()
         aff_cf_envelope = aff_cf_envelope.repeat(1,aff_cf_channels,1,1).view(1,-1,1)  
+        self.aff_cf_envelope = aff_cf_envelope.to(device)
+        
         sre = get_radial_cos(exc_units, exc_units) * exc_cutoff
-        sre /= sre.sum()
-        lri_envelope = get_radial_cos(lat_cf_units, lat_cf_units)**2
+        self.sre = sre.to(device)
+        
+        lri_envelope = get_radial_cos(lat_cf_units, lat_cf_units)
         lri_envelope *= 1 - inh_mask       
         lri_envelope *= inh_cutoff
         lri_envelope = lri_envelope.view(1,-1,1)
         lri_envelope /= lri_envelope.max()
-        self.sre = sre.to(device)
         self.lri_envelope = lri_envelope.to(device)
-        self.aff_cf_envelope = aff_cf_envelope.to(device)
         
         # initialising the aff weights
         init_rfs = torch.rand(sheet_units**2, aff_cf_channels*aff_cf_units**2, 1)
@@ -76,7 +82,7 @@ class CorticalMap(nn.Module):
         self.adathresh = nn.Parameter(thresh_init,requires_grad=False)
         self.avg_acts = torch.zeros((1,1,sheet_units,sheet_units), device=device) + homeo_target
         self.lat_mean = torch.zeros((1,1,sheet_units,sheet_units), device=device)
-        self.strength = 1
+        self.strength = 10
         
         # storing some parameters
         self.homeo_lr = (1-homeo_timescale)/2
@@ -89,7 +95,7 @@ class CorticalMap(nn.Module):
         self.lat_iters = lat_iters
         self.homeo_timescale = homeo_timescale
         self.homeo_target = homeo_target
-        self.lat_strength_target = lat_strength_target
+        self.lat_strength_target = 0.9
         self.strength_lr = 1e-2
         self.inh_exc_balance = inh_exc_balance
                                 
@@ -125,47 +131,56 @@ class CorticalMap(nn.Module):
         else:
             aff = x
             
-        aff = aff - self.adathresh
-        lat = torch.relu(aff)
-                
-        lat_tiles = F.unfold(lat, self.lat_cf_units, dilation=self.lat_cf_dilation)
-
-        #print(lat_tiles.shape, neg_w.shape)
-        lat_tiles = lat_tiles * self.lri_envelope            
-        lat_tiles = lat_tiles.permute(2,0,1)
-        lat_neg = torch.bmm(lat_tiles, lat_w).view(1,1,self.sheet_units,self.sheet_units)
-        lat = lat-lat_neg
+        aff = torch.relu(aff - self.adathresh)
+        lat = aff
         
-        lat_tiles = F.unfold(lat, self.max_rad)
-        lat_max = lat_tiles.max(1, keepdim=True)[1]
-        lat_max = F.onehot(lat_max, num_classes=self.max_rad**2)
-        print(lat_max.shape)
-        
+        if print_flag:
+            plt.imshow(lat.cpu()[0,0])
+            plt.show()
+               
+        for i in range(15):
 
-        # subtracting the thresholds and applying the nonlinearities
-        lat = lat*self.strength + aff
-        lat = torch.tanh(torch.relu(lat))
+            pad = self.max_rad//2
+            lat_tiles = F.unfold(lat, self.max_rad, padding=pad)
+            lat_tiles = lat_tiles * self.max_rad_mask.float()
+            voting_credits = lat.view(1,1,-1) > 0
+            lat_max = lat_tiles.max(1)
+            lat_max_oh = F.one_hot(lat_max[1], num_classes=self.max_rad**2)
+            lat_max = lat_max_oh.permute(0,2,1).float() * voting_credits
             
-            
+            lat_max = F.fold(lat_max, output_size=self.sheet_units, kernel_size=self.max_rad, padding=pad)
+            lat_max[lat_max>1] = 1
+            lat = torch.relu(lat_max * aff - self.adathresh)
+            lat = torch.tanh(lat * self.strength)
+
+        lat = F.conv_transpose2d(lat, self.sre, padding=self.sre.shape[-1]//2)
+        self.lat_mean = lat
+        
+        if print_flag:
+            plt.imshow(lat.cpu()[0,0])
+            plt.show()
+
+
         if not reco_flag:
             if learning_flag:
 
                 # learn the lateral correlations
+                pad = self.lat_cf_units//2*self.lat_cf_dilation
                 lat_tiles = F.pad(lat, (pad,pad,pad,pad), value=self.homeo_target)
                 lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
                 lat_tiles = lat_tiles * self.lri_envelope 
                 lat_tiles = lat_tiles.permute(2,0,1)
                 weighted_lat_tiles = lat_tiles * lat.view(self.sheet_units**2,1,1)
                 lat_correlations = torch.bmm(weighted_lat_tiles, self.lat_weights).sum()
-                    
+                                
             # update the homeostatic variables
-            self.avg_acts = self.homeo_timescale*self.avg_acts + (1-self.homeo_timescale)*lat
+            self.avg_acts = self.homeo_timescale*self.avg_acts + (1-self.homeo_timescale)*self.lat_mean
             gap = (self.avg_acts-self.homeo_target)
             self.adathresh += self.homeo_lr*gap
             
             curr_max_lat = lat.max()
-            if curr_max_lat > 0.1:
-                self.strength -= (curr_max_lat - self.lat_strength_target)*self.strength_lr
+            #if curr_max_lat > 0.1:
+            self.strength -= (curr_max_lat - self.lat_strength_target)*self.strength_lr
                                                                                 
         return raw_aff, lat, lat_correlations, x_tiles
     
