@@ -298,7 +298,7 @@ def plot_from_file():
     plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists)
     
 scalevals = torch.linspace(0,3,16)
-scalevals[0] = 0.01
+scalevals[0] = 0.01 
 kvals = [1,2,3,4]
 print(scalevals)
     
