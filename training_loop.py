@@ -13,7 +13,7 @@ import torchvision.transforms.functional as TF
 
 import config
 from maps_helper import *
-from cortical_map import *
+from fast_gcal import *
 
 def run(X, model=None, stats=None, bar=True):
     
@@ -27,6 +27,10 @@ def run(X, model=None, stats=None, bar=True):
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda()
     device = X.device
+    
+    if config.HALF_MODE:
+        X = X.type(torch.float16)
+        compression_kernel = compression_kernel.type(torch.float16)
                 
     if not model:
         model = CorticalMap(
@@ -42,7 +46,8 @@ def run(X, model=None, stats=None, bar=True):
             config.HOMEO_TIMESCALE,
             config.EXC_SCALE,
             config.INH_SCALE,
-            config.INH_EXC_BALANCE
+            config.INH_EXC_BALANCE,
+            config.HALF_MODE
         ).to(device)
     
     # if theres no stats dictionary
@@ -71,7 +76,8 @@ def run(X, model=None, stats=None, bar=True):
         stats['affinity_tracker'] = torch.zeros(config.N_BATCHES+1)
         stats['reco_tracker'] = torch.zeros(config.N_BATCHES+1)
     
-    optimiser = torch.optim.Adam([model.rfs, model.lat_weights], lr=lr)
+    eps = 1e-5 if config.HALF_MODE else 1e-8
+    optimiser = torch.optim.Adam([model.rfs, model.lat_weights], lr=lr, eps=eps)
     scheduler = torch.optim.lr_scheduler.StepLR(optimiser, step_size=1, gamma=config.LR_DECAY)
     
     progress_bar = enumerate(range(config.N_BATCHES+1))
@@ -120,7 +126,7 @@ def run(X, model=None, stats=None, bar=True):
         if config.PRINT:
             plt.imshow(sample[0,0].cpu())
             plt.show()
-            
+                                    
         raw_aff, lat, lat_correlations, x_tiles = model(
             sample, 
             reco_flag=False, 
@@ -169,7 +175,7 @@ def run(X, model=None, stats=None, bar=True):
                 lat_reco_trimmed = lat_reco[:,:,border_trim:-border_trim,border_trim:-border_trim]
                 lat_trimmed = lat[:,:,border_trim:-border_trim,border_trim:-border_trim]
                 norm = torch.sqrt((lat_reco_trimmed**2).sum() * (lat_trimmed**2).sum())
-                diff = (lat_trimmed * lat_reco_trimmed).sum() / (norm + 1e-11)        
+                diff = (lat_trimmed * lat_reco_trimmed).sum() / (norm + 1e-5)        
                 if diff:
                     reco_max_lat = lat_reco.max()
                     stats['avg_reco'] = (1-stats['rf_beta'])*stats['avg_reco'] + stats['rf_beta']*diff
@@ -206,8 +212,8 @@ def run(X, model=None, stats=None, bar=True):
             rfs_det = model.get_rfs()
             aff_flat = raw_aff.detach().view(-1)
             norms = torch.sqrt((rfs_det**2).sum(1) * (x_tiles**2).sum(2)).view(-1)
-            cos_sims = aff_flat * lat.view(-1) / (norms * lat.sum() + 1e-11)
-            #reco_cos_sims = aff_flat * lat_reco.view(-1) / (norms * lat_reco.sum() + 1e-11)
+            cos_sims = aff_flat * lat.view(-1) / (norms * lat.sum() + 1e-5)
+            #reco_cos_sims = aff_flat * lat_reco.view(-1) / (norms * lat_reco.sum() + 1e-5)
             rf_affinity = cos_sims.sum()
             #reco_rf_affinity = reco_cos_sims.sum()
             stats['rf_affinity'] = (1-stats['rf_beta'])*stats['rf_affinity'] + stats['rf_beta']*rf_affinity

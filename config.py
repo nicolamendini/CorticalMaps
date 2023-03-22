@@ -18,19 +18,20 @@ LGN_ITERS = 0
 # ---------------------------------
 
 CROPSIZE = 38
-EXPANSION = 0.67
-ITERS = 30
+EXPANSION = 2.67
+ITERS = 8
 # relative to CROPSIZE [0,1]
 RF_STD = 4
-N_BATCHES = 3
+N_BATCHES = 20000
 LR = 1e-4
 HOMEO_TIMESCALE = 0.999
-TARGET_LR_DEC = 200
-EXC_STD = 0.1
+TARGET_LR_DEC = 100
+EXC_STD = 1.4
 # TARGET_STRENGTH = 0.8 is tested and proven to be the best
 TARGET_STRENGTH = 0.8
-TARGET_ACT = 0.015
-INH_EXC_BALANCE = 0.55
+TARGET_ACT = 0.024
+INH_EXC_BALANCE = 0.5
+HALF_MODE = False
 
 # FLAGS
 # ---------------------------------

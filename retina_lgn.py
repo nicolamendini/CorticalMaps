@@ -14,13 +14,13 @@ def retina_lgn(
     gc_eps,
     saturation,
     lgn_iters,
-    target_max=0.8,
+    target_max=1,
     eps_thresh=1e-3
 ):
     
     # simulating the retinal processes
     ret_log_size = round(ret_log_std*13)
-    ret_log_size = ret_log_size+1 if ret_log_size%2==0 else ret_log_size
+    ret_log_size = oddenise(ret_log_size)
     log = (get_log(ret_log_size, ret_log_std)  * get_circle(ret_log_size, ret_log_size)) 
     log = log.to(X.device).type(torch.float16)
     X = F.pad(X,(ret_log_size//2,ret_log_size//2,ret_log_size//2,ret_log_size//2), mode='reflect')
@@ -38,7 +38,7 @@ def retina_lgn(
     if lgn_iters:
         # applying another stage of on/off filtering if required
         lgn_log_size = round(lgn_log_std*13)
-        lgn_log_size = lgn_log_size+1 if lgn_log_size%2==0 else lgn_log_size
+        lgn_log_size = oddenise(lgn_log_size)
         log = (get_log(lgn_log_size, lgn_log_std) * get_circle(lgn_log_size, lgn_log_size/2)) 
         log = log.to(X.device).type(torch.float16)
         for i in range(lgn_iters):
@@ -60,7 +60,7 @@ def retina_lgn(
     # LGN stages. Applying gain control as implemented in stevens 2008 GCAL
     if hard_gc:
         gcsize = round(gcstd*5)
-        gcsize = gcsize+1 if gcsize%2==0 else gcsize
+        gcsize = oddenise(gcsize)
         gc_kernel = (get_radial_cos(gcsize, gcsize)**2 * get_circle(gcsize, gcsize/2))
         gc_kernel = gc_kernel.type(torch.float16).to(X.device) / gc_kernel.sum()
         

@@ -22,7 +22,7 @@ from retina_lgn import *
 from maps_helper import *
 
 # Function to collect stats
-def run_print_stats(scalevals, kvals, X, reps=3):
+def run_print_stats(scalevals, kvals, X, reps=6):
         
     trials = len(scalevals)
     ktrials = len(kvals)
@@ -296,6 +296,7 @@ def plot_from_file():
     counts = torch.load('sim_data/gcal_compressib/files_to_plot/counts.pt')
     
     plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists)
+    
     
 scalevals = torch.linspace(0,3,16)
 scalevals[0] = 0.01 
