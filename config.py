@@ -23,15 +23,15 @@ EXPANSION = 2.67
 ITERS = 8
 # relative to CROPSIZE [0,1]
 RF_STD = 4
-N_BATCHES = 30000
+N_BATCHES = 50000
 LR = 1
 HOMEO_TIMESCALE = 0.999
-TARGET_LR_DEC = 300
-EXC_STD = 1.4
+TARGET_LR_DEC = 500
+EXC_STD = 1.8
 # TARGET_STRENGTH = 0.8 is tested and proven to be the best
 TARGET_ACT = 0.024
 STRENGTH = 100
-MAX_INH_FAC = 3.5
+MAX_INH_FAC = 2
 
 # FLAGS
 # ---------------------------------
@@ -53,7 +53,7 @@ EXC_SCALE = max(round((EXC_STD)*5),1)
 EXC_SCALE = oddenise(EXC_SCALE)
 
 # dilation is twice the exc scale
-DILATION = max(int(EXC_STD*2.5),1)
+DILATION = max(int(EXC_STD*2),1)
 COMPRESSION = round(EXPANSION*3/2)
 COMPRESSION = DILATION
 

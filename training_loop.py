@@ -95,9 +95,6 @@ def run(X, model=None, stats=None, bar=True):
         input_pad = config.RF_SIZE//2
         sample = TF.rotate(sample, random.randint(0,360), interpolation=TF.InterpolationMode.BILINEAR)
 
-        if random.random() > 0.5:
-            sample = sample.flip(-1)
-
         new_w = sample.shape[-1]
         cropsize = config.CROPSIZE + input_pad*2
         crange = new_w-cropsize
@@ -105,9 +102,6 @@ def run(X, model=None, stats=None, bar=True):
         cy = random.randint(0,crange)
 
         sample = sample[:,:,cx:cx+cropsize,cy:cy+cropsize]
-        
-        if random.random() > 0.5:
-            sample = sample.flip(-1)
                       
         target_size = config.GRID_SIZE
         # tha padding should not go below an expansion of 1

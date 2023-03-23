@@ -162,9 +162,7 @@ class CorticalMap(nn.Module):
             lat_tiles = lat_tiles * self.lri_envelope            
             lat_tiles = lat_tiles.permute(2,0,1)
             lat_neg = torch.bmm(lat_tiles, lat_w).view(1,1,self.sheet_units,self.sheet_units)
-            inh_balance = self.max_inh_fac * (1-(i/(self.lat_iters-1))) + 0.5 
-            #inh_balance = self.max_inh_fac if i<5 else 1
-            lat = lat - lat_neg*inh_balance
+            lat = lat - lat_neg*self.max_inh_fac
             
             lat = torch.relu(lat + aff)*self.strength
 
