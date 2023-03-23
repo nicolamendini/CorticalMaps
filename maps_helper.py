@@ -442,9 +442,10 @@ def get_jittered_indices(input_size, kernel_size, dilation, output_size, channel
 def get_norm_loss(weights):
     
     w_det = weights.detach()
-    w_sum = w_det.sum(1, keepdim=True)
+    w_mean = w_det.mean(1, keepdim=True)
     # similar to l2 loss in that the decay is proportional to the weight but has target norn 1
-    w_norm = (torch.relu(w_sum - 1) * w_det * weights).sum() * w_det.shape[1]
+    gap = torch.relu(w_mean - 1)
+    w_norm = (gap * w_det * weights).sum()
     return w_norm
 
 # ensemble loss
@@ -452,9 +453,9 @@ def cosine_loss(raw_aff, lat, lat_correlations, model):
     
     #winners = torch.einsum('abcd, abcd ->',h,lat)
     winners = (raw_aff * model.lat_mean).sum()
-    rfs_norm = get_norm_loss(model.rfs)    
-    lat_w_norm = get_norm_loss(model.lat_weights)
-    loss = -winners -lat_correlations +rfs_norm +lat_w_norm
+    #rfs_norm = get_norm_loss(model.rfs)    
+    #lat_w_norm = get_norm_loss(model.lat_weights)
+    loss = -winners -lat_correlations #+rfs_norm +lat_w_norm
         
     return loss
 

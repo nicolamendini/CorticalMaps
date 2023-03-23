@@ -27,10 +27,8 @@ def run(X, model=None, stats=None, bar=True):
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda()
     device = X.device
-    
-    if config.HALF_MODE:
-        X = X.type(torch.float16)
-        compression_kernel = compression_kernel.type(torch.float16)
+    compression_kernel = compression_kernel.type(config.DTYPE)
+    X = X.type(config.DTYPE)
                 
     if not model:
         model = CorticalMap(
@@ -41,13 +39,13 @@ def run(X, model=None, stats=None, bar=True):
             config.EXPANSION,
             config.DILATION,
             config.ITERS,
-            config.TARGET_STRENGTH,
+            config.STRENGTH,
             config.TARGET_ACT,
             config.HOMEO_TIMESCALE,
             config.EXC_SCALE,
             config.INH_SCALE,
-            config.INH_EXC_BALANCE,
-            config.HALF_MODE
+            config.MAX_INH_FAC,
+            config.DTYPE
         ).to(device)
     
     # if theres no stats dictionary
@@ -76,8 +74,7 @@ def run(X, model=None, stats=None, bar=True):
         stats['affinity_tracker'] = torch.zeros(config.N_BATCHES+1)
         stats['reco_tracker'] = torch.zeros(config.N_BATCHES+1)
     
-    eps = 1e-5 if config.HALF_MODE else 1e-8
-    optimiser = torch.optim.Adam([model.rfs, model.lat_weights], lr=lr, eps=eps)
+    optimiser = torch.optim.SGD([model.rfs, model.lat_weights], lr=lr, momentum=0.9)
     scheduler = torch.optim.lr_scheduler.StepLR(optimiser, step_size=1, gamma=config.LR_DECAY)
     
     progress_bar = enumerate(range(config.N_BATCHES+1))
@@ -96,7 +93,6 @@ def run(X, model=None, stats=None, bar=True):
         sample = X[rand_idx:rand_idx+1]
         
         input_pad = config.RF_SIZE//2
-        #sample = F.pad(sample,(input_pad,input_pad,input_pad,input_pad))
         sample = TF.rotate(sample, random.randint(0,360), interpolation=TF.InterpolationMode.BILINEAR)
 
         if random.random() > 0.5:
@@ -107,11 +103,6 @@ def run(X, model=None, stats=None, bar=True):
         crange = new_w-cropsize
         cx = random.randint(0,crange)
         cy = random.randint(0,crange)
-
-        #do not take samples outside of a circle inscripted in the image
-        #while ((cx-crange/2)**2 + (cy-crange/2)**2) > (crange/2)**2:
-        #    cx = random.randint(0,crange)
-        #    cy = random.randint(0,crange)
 
         sample = sample[:,:,cx:cx+cropsize,cy:cy+cropsize]
         
@@ -172,8 +163,8 @@ def run(X, model=None, stats=None, bar=True):
                     )
 
                 # trimming away the borders before computing the cosine similarity to avoid border effects
-                lat_reco_trimmed = lat_reco[:,:,border_trim:-border_trim,border_trim:-border_trim]
-                lat_trimmed = lat[:,:,border_trim:-border_trim,border_trim:-border_trim]
+                lat_reco_trimmed = lat_reco[:,:,border_trim:-border_trim,border_trim:-border_trim].float()
+                lat_trimmed = lat[:,:,border_trim:-border_trim,border_trim:-border_trim].float()
                 norm = torch.sqrt((lat_reco_trimmed**2).sum() * (lat_trimmed**2).sum())
                 diff = (lat_trimmed * lat_reco_trimmed).sum() / (norm + 1e-5)        
                 if diff:
@@ -210,7 +201,7 @@ def run(X, model=None, stats=None, bar=True):
             stats['last_lat'] = lat
             
             rfs_det = model.get_rfs()
-            aff_flat = raw_aff.detach().view(-1)
+            aff_flat = raw_aff.detach().view(-1).float()
             norms = torch.sqrt((rfs_det**2).sum(1) * (x_tiles**2).sum(2)).view(-1)
             cos_sims = aff_flat * lat.view(-1) / (norms * lat.sum() + 1e-5)
             #reco_cos_sims = aff_flat * lat_reco.view(-1) / (norms * lat_reco.sum() + 1e-5)
@@ -229,7 +220,7 @@ def run(X, model=None, stats=None, bar=True):
                 lat*factors*stats['global_corr_beta']
         if bar:
             progress_bar.set_description(\
-                "affinity: {:.3f} reco cos: {:.3f} ensemble: {:.3f} avg act: {:.3f} max act: {:.3f} threshs: {:.3f} LR: {:.7f}".format\
+                "affinity: {:.3f} reco cos: {:.3f} ensemble: {:.3f} avg act: {:.3f} max act: {:.3f} threshs: {:.3f} LR: {:.3f}".format\
             (
                 stats['rf_affinity'], 
                 stats['avg_reco'], 
@@ -244,9 +235,8 @@ def run(X, model=None, stats=None, bar=True):
         scheduler.step()
         lr = scheduler.get_last_lr()[0]
         
-        curr_max_lat = lat.max()
+        curr_max_lat = lat.float().max()
         if curr_max_lat > 0.1:
             stats['max_lat'] = (1-stats['strength_beta'])*stats['max_lat'] + stats['strength_beta']*curr_max_lat
-            #config.STRENGTH -= (curr_max_lat - config.TARGET_ACT_STRENGTH)*stats['strength_beta']
             
     return model, stats
