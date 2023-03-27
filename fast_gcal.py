@@ -36,6 +36,7 @@ class CorticalMap(nn.Module):
         super().__init__()
         
         self.type = dtype
+        self.float_mult = 1e-1
         
         # defining the lateral interaction envelopes, connections cutoffs and masks
         aff_cutoff = get_circle(aff_cf_units, aff_cf_units/2)
@@ -85,7 +86,7 @@ class CorticalMap(nn.Module):
         self.lat_mean = torch.zeros((1,1,sheet_units,sheet_units), device=device).type(self.type)
         
         # storing some parameters
-        self.homeo_lr = (1-homeo_timescale)/2
+        self.homeo_lr = (1-homeo_timescale)
         self.lat_cf_units = lat_cf_units
         self.lat_cf_dilation = lat_cf_dilation
         self.aff_cf_units = aff_cf_units
@@ -109,8 +110,8 @@ class CorticalMap(nn.Module):
         with torch.no_grad():
             #self.rfs *= (self.rfs>0)
             #self.lat_weights *= (self.lat_weights>0)
-            self.rfs /= self.rfs.sum(1,keepdim=True) / self.rfs.shape[1]
-            self.lat_weights /= self.lat_weights.sum(1,keepdim=True) / self.lat_weights.shape[1]
+            self.rfs /= self.rfs.sum(1,keepdim=True) / (self.rfs.shape[1]*self.float_mult)
+            self.lat_weights /= self.lat_weights.sum(1,keepdim=True) / (self.lat_weights.shape[1]*self.float_mult)
                                 
         lat_weights = self.lat_weights
         rfs = self.rfs
@@ -118,7 +119,7 @@ class CorticalMap(nn.Module):
         if not learning_flag:
             rfs = rfs.detach()
         lat_w = lat_weights.detach() 
-        lat_w = lat_w / lat_w.shape[1] #lat_w.sum(1, keepdim=True) + 1e-5
+        lat_w /= lat_w.shape[1]*self.float_mult #lat_w.sum(1, keepdim=True) + 1e-5
         
                                     
         # computing the afferent response
@@ -131,7 +132,7 @@ class CorticalMap(nn.Module):
             raw_aff = torch.bmm(x_tiles, rfs)
             raw_aff = raw_aff.view(1,1,self.sheet_units,self.sheet_units)
             aff = raw_aff.detach()
-            aff /= rfs.shape[1] #rfs.detach().sum(1,keepdim=True).view(aff.shape) + 1e-5
+            aff /= rfs.shape[1]*self.float_mult 
                         
         # if feedback is coming, just take the feedback
         else:
@@ -144,7 +145,7 @@ class CorticalMap(nn.Module):
         for i in range(self.lat_iters):
                                     
             if print_flag:
-                plt.imshow(lat.detach().cpu()[0,0])
+                plt.imshow(lat.detach().cpu()[0,0].float())
                 plt.show()
                 print(lat.max(), lat.mean())
                 
@@ -202,8 +203,8 @@ class CorticalMap(nn.Module):
     
     def get_rfs(self):
         rfs = self.rfs.detach()
-        return rfs / rfs.shape[1] #(rfs.sum(1,keepdim=True) + 1e-5)
+        return rfs / (rfs.shape[1]*self.float_mult)
     
     def get_lat_weights(self):
         lat_weights = self.lat_weights.detach()
-        return lat_weights / lat_weights.shape[1] #(lat_weights.sum(1,keepdim=True) + 1e-5)
+        return lat_weights / (lat_weights.shape[1]*self.float_mult)

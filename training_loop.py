@@ -107,9 +107,10 @@ def run(X, model=None, stats=None, bar=True):
         # tha padding should not go below an expansion of 1
         target_size += input_pad*2*max(round(config.EXPANSION),1)
         sample = F.interpolate(sample, target_size, mode='bilinear')
-        
+        #sample = sample.type(config.DTYPE)
+                
         if config.PRINT:
-            plt.imshow(sample[0,0].cpu())
+            plt.imshow(sample[0,0].cpu().float())
             plt.show()
                                     
         raw_aff, lat, lat_correlations, x_tiles = model(
@@ -171,15 +172,15 @@ def run(X, model=None, stats=None, bar=True):
                     print('reco, sample, lat, lat_reco')
                     plt.figure(figsize=(10,10))
                     plt.subplot(2,2,1)
-                    plt.imshow(reco[0,0].cpu())
+                    plt.imshow(reco[0,0].cpu().float())
                     plt.subplot(2,2,2)
-                    plt.imshow(sample[0,0].cpu())
+                    plt.imshow(sample[0,0].cpu().float())
                     plt.subplot(2,2,3)
-                    plt.imshow(lat[0,0].cpu())
+                    plt.imshow(lat[0,0].cpu().float())
                     plt.subplot(2,2,4)
-                    plt.imshow(((lat_reco-lat).abs())[0,0].cpu())
+                    plt.imshow(((lat_reco-lat).abs())[0,0].cpu().float())
                     plt.show()
-                    plt.imshow(compressed[0,0].cpu())
+                    plt.imshow(compressed[0,0].cpu().float())
                     plt.show()
                     print('reco max: ', reco.max())
                     print('reco: ', lat_reco.max(), 'lat: ', lat.max())

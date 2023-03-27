@@ -14,6 +14,7 @@ import matplotlib.font_manager as fm
 import os
 from matplotlib.ticker import FormatStrFormatter
 import seaborn as sns
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import config
 from training_loop import *
@@ -22,7 +23,7 @@ from retina_lgn import *
 from maps_helper import *
 
 # Function to collect stats
-def run_print_stats(scalevals, kvals, X, reps=6):
+def run_print_stats(scalevals, kvals, X, reps=3):
         
     trials = len(scalevals)
     ktrials = len(kvals)
@@ -93,7 +94,7 @@ def run_print_stats(scalevals, kvals, X, reps=6):
 # function to plot the results of many trials with different scale parameters
 def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists):
     
-    sns.set()
+    #sns.set()
     
     trials = len(scalevals)
     ktrials = len(kvals)
@@ -138,16 +139,17 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         plt.yticks(fontsize=fs)
         plt.locator_params(nbins=6)
         if k==0:
-            plt.ylabel('Combined Score', fontsize=fs)
+            plt.ylabel('Transmission Accuracy', fontsize=fs)
         plt.xlabel('Excitation Range (mm)', fontsize=fs)
         plt.title('Projection Sparsity: '+ str(kvals[k]), fontsize=fs)
-        plt.ylim(0.6,1)
+        plt.ylim(0.6,1.01)
         means = ensemble_mean[k]
         stds = ensemble_err[k]
-        plt.errorbar(scalevals*mm_conv, means, 0, color='black')
+        plt.plot(scalevals*mm_conv, affinities[:,k].mean(0), 'k:', label='LGN to V1')
+        plt.plot(scalevals*mm_conv, compressib[:,k].mean(0), 'k--', label='V1 to V2')
+        plt.plot(scalevals*mm_conv, means, color='black', label='combined')
         plt.fill_between(scalevals*mm_conv, means - stds, means + stds, color='b', alpha=0.2)
-        plt.plot(scalevals*mm_conv, affinities[:,k].mean(0), 'k:')
-        plt.plot(scalevals*mm_conv, compressib[:,k].mean(0), 'k--')
+        plt.legend(fontsize=16, loc=(0.4,0.5))
         
     ref_ax=0
     pad = 5
@@ -171,8 +173,8 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         best = format(float(scalevals[ensemble_mean[k].argmax()])*mm_conv, '.2f')
         plt.title('Best Range: '+ best +'mm', fontsize=fs)
         if k==0:
-            plt.ylabel('Length (mm)', fontsize=fs)
-        plt.xlabel('Length (mm)', fontsize=fs)
+            plt.ylabel('mm', fontsize=fs)
+        plt.xlabel('mm', fontsize=fs)
         plt.xticks(fontsize=fs, ticks=(0,50,100), labels=(-2.5, 0, 2.5))
         plt.yticks(fontsize=fs, ticks=(0,50,100), labels=(-2.5, 0, 2.5))
         plt.locator_params(nbins=3)
@@ -202,16 +204,22 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         plt.locator_params(nbins=3)
         #plt.tick_params(left=False,bottom=False,labelleft=False,labelbottom=False)
         if k==0:
-            plt.ylabel('Frequency(mm\u207B\u00B9)', fontsize=fs)
-        plt.xlabel('Frequency(mm\u207B\u00B9)', fontsize=fs)
+            plt.ylabel('mm\u207B\u00B9', fontsize=fs)
+        plt.xlabel('mm\u207B\u00B9', fontsize=fs)
         plt.xticks(fontsize=fs)
         plt.yticks(fontsize=fs)
         ax = plt.gca()
         ax.set_box_aspect(1)
         ring = best_rings[0,k]**2
         ring[~freq_mask] = torch.tensor(1)/0.
-        ax.imshow(ring, cmap='Greys', extent=ticks_range)
+        im=ax.imshow(ring, cmap='Greys', extent=ticks_range)
         ax.plot(np.linspace(0,0.5,max_grid_size//2-1), hists_max[k,0]/4-0.5, linewidth=2, color='red')
+        divider = make_axes_locatable(ax)
+        cb = fig.colorbar(im,  cax=ax.inset_axes((0.9, 0.65, 0.05, 0.3)))
+        cb.set_ticks([0, (best_rings[0,k]**2).max()])
+        cb.set_ticklabels(['min', 'max'])
+        cb.ax.tick_params(labelsize=fs)
+        cb.ax.yaxis.set_ticks_position('left')
         
     for k in range(ktrials):
 
@@ -229,7 +237,7 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         stds = ratios[:,k].std(0)/np.pi
         plt.errorbar(scalevals*mm_conv, means, 0, color='black')
         plt.fill_between(scalevals*mm_conv, means - stds, means + stds, color='b', alpha=0.2)
-        plt.plot(scalevals*mm_conv, [1]*len(scalevals), 'r--', linewidth=2)
+        plt.plot(scalevals*mm_conv, [1]*len(scalevals), color='grey', linestyle='--', linewidth=2)
     
     
     plt.savefig('sim_data/gcal_compressib/tradeoff.png')
