@@ -11,6 +11,7 @@ import math
 import torchvision.transforms.functional as TF
 
 from maps_helper import *
+import config
 
 # Cortical Map Module
 class CorticalMap(nn.Module):
@@ -55,7 +56,7 @@ class CorticalMap(nn.Module):
         inh_mask *= get_circle(lat_cf_units, exc_units/(2*lat_cf_dilation))
         lri_envelope = get_radial_cos(lat_cf_units, lat_cf_units)**2
         lri_envelope *= inh_cutoff
-        lri_envelope *= 1 - inh_mask    
+        #lri_envelope *= 1 - inh_mask    
         lri_envelope = lri_envelope.view(1,-1,1)
         lri_envelope /= lri_envelope.max()
         self.lri_envelope = lri_envelope.to(device).type(self.type)
@@ -80,10 +81,13 @@ class CorticalMap(nn.Module):
         print('initialised means: ', init_lat.mean(), init_rfs.mean())
                 
         # defining the variables of homeostatic adaptation
-        thresh_init = torch.zeros((1,1,sheet_units,sheet_units), device=device) + 0.1
+        sheet_shape = (1,1,sheet_units,sheet_units)
+        thresh_init = torch.zeros(sheet_shape, device=device) + 0.1
         self.adathresh = nn.Parameter(thresh_init,requires_grad=False).type(self.type)
-        self.avg_acts = torch.zeros((1,1,sheet_units,sheet_units), device=device).type(self.type) + homeo_target
-        self.lat_mean = torch.zeros((1,1,sheet_units,sheet_units), device=device).type(self.type)
+        self.avg_acts = torch.zeros(sheet_shape, device=device).type(self.type) + homeo_target
+        self.lat_mean = torch.zeros(sheet_shape, device=device).type(self.type)
+        self.last_lat = torch.zeros(sheet_shape, device=device).type(self.type)
+        self.inh_coef = 1
         
         # storing some parameters
         self.homeo_lr = (1-homeo_timescale)
@@ -98,6 +102,7 @@ class CorticalMap(nn.Module):
         self.homeo_target = homeo_target
         self.strength = strength
         self.max_inh_fac = max_inh_fac
+        self.lat_mean_beta = 0.5
                                 
     def forward(self, x, reco_flag=False, learning_flag=True, print_flag=False):
         
@@ -105,11 +110,9 @@ class CorticalMap(nn.Module):
         lat_correlations = 0
         raw_aff = 0
         x_tiles = 0
-                 
+                         
         # ensuring that the weights stay always non negative
         with torch.no_grad():
-            #self.rfs *= (self.rfs>0)
-            #self.lat_weights *= (self.lat_weights>0)
             self.rfs /= self.rfs.sum(1,keepdim=True) / (self.rfs.shape[1]*self.float_mult)
             self.lat_weights /= self.lat_weights.sum(1,keepdim=True) / (self.lat_weights.shape[1]*self.float_mult)
                                 
@@ -119,12 +122,11 @@ class CorticalMap(nn.Module):
         if not learning_flag:
             rfs = rfs.detach()
         lat_w = lat_weights.detach() 
-        lat_w /= lat_w.shape[1]*self.float_mult #lat_w.sum(1, keepdim=True) + 1e-5
-        
+        lat_w /= lat_w.shape[1]*self.float_mult
+                
                                     
         # computing the afferent response
         if not reco_flag:
-            self.lat_mean *= 0
             dilation = 1 if self.aff_cf_dilation<1 else round(self.aff_cf_dilation)
             x_tiles = F.unfold(x, self.aff_cf_units, dilation=dilation)    
             x_tiles = x_tiles * self.aff_cf_envelope
@@ -139,15 +141,25 @@ class CorticalMap(nn.Module):
             aff = x
             
         aff = aff - self.adathresh
-        lat = torch.relu(aff)
+        lat = self.last_lat
                                 
+        self.lat_iters = 10
         # reaction diffusion
         for i in range(self.lat_iters):
-                                    
+                                                
             if print_flag:
+                plt.figure(figsize=(10,5))
+                plt.subplot(1,2,1)
                 plt.imshow(lat.detach().cpu()[0,0].float())
+                plt.subplot(1,2,2)
+                plt.imshow(self.inh_coef[0,0].cpu().float())
                 plt.show()
-                print(lat.max(), lat.mean())
+                print('lat max {:.3f} lat min: {:.3f} inh_coef max {:.3f} inh_coef min {:.3f}'.format( 
+                    lat.max(), 
+                    lat.mean(),
+                    self.inh_coef.max(), 
+                    self.inh_coef.min()
+                ))
                 
             # short range excitation is applied first
             pos_pad = self.sre.shape[-1]//2
@@ -163,21 +175,35 @@ class CorticalMap(nn.Module):
             lat_tiles = lat_tiles * self.lri_envelope            
             lat_tiles = lat_tiles.permute(2,0,1)
             lat_neg = torch.bmm(lat_tiles, lat_w).view(1,1,self.sheet_units,self.sheet_units)
-            lat = lat - lat_neg*self.max_inh_fac
             
-            lat = torch.relu(lat + aff)*self.strength
+            exc_factor = self.inh_coef #0.5
+                        
+            lat = torch.relu(lat*exc_factor - lat_neg + aff)*5 #self.strength
+            #lat = torch.tanh(lat)
 
             max_pad = self.max_r//2
-            lat_max = F.pad(lat, (max_pad, max_pad, max_pad, max_pad), mode='reflect')
+            lat_max = F.pad(lat, (max_pad, max_pad, max_pad, max_pad))
             
             lat_max = F.unfold(lat_max, self.max_r) * self.max_mask
             lat_max = lat_max.max(1)[0]
             lat_max = lat_max.view(1,1,self.sheet_units,self.sheet_units)
-            lat_max[lat_max<1] = 1
-            lat = lat / (lat_max+1e-5)
+            #lat_max[lat_max<1] = 1
+            #lat = lat / lat_max
         
-            self.lat_mean += lat
-                        
+            sudden_change = 0
+            if not reco_flag:
+                sudden_change = torch.relu(lat - self.last_lat)
+                sudden_change = F.pad(sudden_change, (max_pad, max_pad, max_pad, max_pad))
+                sudden_change = F.unfold(sudden_change, self.max_r) * self.max_mask
+                sudden_change = sudden_change.max(1)[0]
+                sudden_change = sudden_change.view(1,1,self.sheet_units,self.sheet_units)
+                self.last_lat = lat
+                self.lat_mean = self.lat_mean*self.lat_mean_beta + (1-self.lat_mean_beta)*lat
+
+            inh_coef = torch.exp(-0.5*lat_max**2 -4*sudden_change**2)
+            self.inh_coef = self.inh_coef*self.lat_mean_beta + (1-self.lat_mean_beta)*inh_coef
+                
+            #print('a',self.inh_coef.mean(),self.inh_coef.min(),self.inh_coef.max())
             #if i==4:
             #    print('reset')
             #    aff = -self.adathresh
@@ -186,7 +212,6 @@ class CorticalMap(nn.Module):
             if learning_flag:
 
                 # learn the lateral correlations
-                self.lat_mean /= self.lat_iters
                 lat_tiles = F.pad(self.lat_mean, (pad,pad,pad,pad), value=0)
                 lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
                 lat_tiles = lat_tiles * self.lri_envelope 

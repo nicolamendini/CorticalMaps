@@ -396,7 +396,6 @@ def get_orientations(rfs, ksize, grid_size, on_off_flag=True, det_steps=2, discr
     # get the gabor detectors
     detectors = get_orientation_detectors(ksize,ksize,det_steps,discreteness).to(rfs.device)
     #rfs = rfs / torch.sqrt((rfs**2).sum(1, keepdim=True))
-    rfs = rfs / rfs.sum(1, keepdim=True)
     rfs = rfs.view(-1, 2, ksize, ksize)
 
     # decide whether to measure the on or off channel
@@ -496,4 +495,19 @@ def plot_absolute_phases(model,target_channel=0):
     plt.gca().add_collection(LineCollection(segs2))
     
     plt.show()
+    
+# function to perform a step of a levy walk
+def levy_step(grid_size, x, y, min_step_size, long_step_p):
+    
+    step_size = min_step_size if random.random()>long_step_p else grid_size
+    dx = (random.random()-0.5) * step_size
+    dy = (random.random()-0.5) * step_size
+    
+    x += dx
+    y += dy
+    
+    x = round(x) % grid_size
+    y = round(y) % grid_size
+        
+    return x, y
 

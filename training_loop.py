@@ -18,7 +18,7 @@ from fast_gcal import *
 def run(X, model=None, stats=None, bar=True):
     
     lr = config.LR
-    channels = X.shape[1]
+    channels = X.shape[2]
     cstd = 0.8*config.COMPRESSION*5
     csize = round(cstd)
     csize = csize+1 if csize%2==0 else csize
@@ -29,6 +29,12 @@ def run(X, model=None, stats=None, bar=True):
     device = X.device
     compression_kernel = compression_kernel.type(config.DTYPE)
     X = X.type(config.DTYPE)
+    input_pad = config.RF_SIZE//2
+    cropsize = config.CROPSIZE + input_pad*2
+    crange = X.shape[-1]-cropsize
+    target_size = config.GRID_SIZE
+    # tha padding should not go below an expansion of 1
+    target_size += input_pad*2*max(round(config.EXPANSION),1)
                 
     if not model:
         model = CorticalMap(
@@ -58,14 +64,15 @@ def run(X, model=None, stats=None, bar=True):
             (config.CORR_SAMPLES,config.CORR_SAMPLES,config.GRID_SIZE,config.GRID_SIZE), 
             device=device
         )
-        stats['last_lat'] = torch.zeros(1,1,config.GRID_SIZE,config.GRID_SIZE).to(device)
+        stats['last_lat'] = torch.zeros((1,1,config.GRID_SIZE,config.GRID_SIZE), device=device)
+        stats['fixation_map'] = torch.zeros((crange, crange))
         stats['avg_reco'] = 0
         stats['last_sample'] = 0
         stats['threshs'] = 0
         stats['max_lat'] = 0
     stats['global_corr_beta'] = 1e-4
     stats['avg_act_beta'] = 1e-3
-    stats['rf_beta'] = 1e-3
+    stats['rf_beta'] = 3e-4
     stats['strength_beta'] = 3e-3
     
     # refresh these only if I'm not just plotting stuff
@@ -83,31 +90,30 @@ def run(X, model=None, stats=None, bar=True):
     else:
         print('run starting, scale is: ', config.SCALE)
 
+    frame_idx = 0
+    cx, cy = crange//2, crange//2
+
     for _,idx in progress_bar:
         
         if idx%config.MAP_SAMPLS==0 and not config.PRINT:
             stats['map_tracker'][idx//config.MAP_SAMPLS] = get_orientations(
                 model.get_rfs(), config.RF_SIZE, config.GRID_SIZE)[0]
 
-        rand_idx = random.randint(0, X.shape[0]-1)
-        sample = X[rand_idx:rand_idx+1]
-        
-        input_pad = config.RF_SIZE//2
-        sample = TF.rotate(sample, random.randint(0,360), interpolation=TF.InterpolationMode.BILINEAR)
-
-        new_w = sample.shape[-1]
-        cropsize = config.CROPSIZE + input_pad*2
-        crange = new_w-cropsize
-        cx = random.randint(0,crange)
-        cy = random.randint(0,crange)
-
-        sample = sample[:,:,cx:cx+cropsize,cy:cy+cropsize]
-                      
-        target_size = config.GRID_SIZE
-        # tha padding should not go below an expansion of 1
-        target_size += input_pad*2*max(round(config.EXPANSION),1)
+        if idx%config.FRAMES_PER_TOY==0:
+            
+            toy_idx = random.randint(0, X.shape[0]-1)
+            frame_idx = 0 if config.FRAMES_PER_TOY>1 else random.randint(0, config.FRAMES_PER_TOY-1)
+            X_toy = X[toy_idx]
+            rand_rot_angle = random.randint(0,360)
+            X_toy = TF.rotate(X_toy, rand_rot_angle, interpolation=TF.InterpolationMode.BILINEAR)
+            
+        else:
+            frame_idx += 1
+            
+        cx, cy = levy_step(crange, cx, cy, min_step_size=5, long_step_p=0.1)
+        sample = X_toy[frame_idx:frame_idx+1,:,cx:cx+cropsize,cy:cy+cropsize]
         sample = F.interpolate(sample, target_size, mode='bilinear')
-        #sample = sample.type(config.DTYPE)
+        stats['fixation_map'][cx, cy] += 1
                 
         if config.PRINT:
             plt.imshow(sample[0,0].cpu().float())
@@ -148,6 +154,9 @@ def run(X, model=None, stats=None, bar=True):
                 gap = lat.shape[-1] - reco.shape[-1]
                 reco = F.pad(reco, (0,gap,0,gap))
                 reco *= config.COMPRESSION**2 
+                
+                if config.PRINT:
+                    print('----RECO-----')
                             
                 with torch.no_grad():
                     _,lat_reco,_,_ = model(

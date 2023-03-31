@@ -276,6 +276,8 @@ def collect():
         config.LGN_ITERS
     )
     X = X.float()
+    X = X[torch.randperm(X.shape[0])]
+    X = X.view(-1, config.FRAMES_PER_TOY, 2, X.shape[-1], X.shape[-1])
 
     affinities, compressib, maps, ratios, avg_peaks, spectra, hists, counts = run_print_stats(scalevals, kvals,X)
     plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists)
