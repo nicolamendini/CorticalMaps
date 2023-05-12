@@ -13,7 +13,7 @@ import torchvision.transforms.functional as TF
 
 import config
 from maps_helper import *
-from fast_gcal import *
+from cortical_map import *
 
 def run(X, model=None, stats=None, bar=True):
     
@@ -35,6 +35,10 @@ def run(X, model=None, stats=None, bar=True):
     target_size = config.GRID_SIZE
     # tha padding should not go below an expansion of 1
     target_size += input_pad*2*max(round(config.EXPANSION),1)
+    
+    X = X.view(config.FRAMES_PER_TOY, -1, channels, config.INPUT_SIZE, config.INPUT_SIZE)
+    X = X[torch.randperm(X.shape[0])]
+    X = X.view(-1, 1, channels, config.INPUT_SIZE, config.INPUT_SIZE)
                 
     if not model:
         model = CorticalMap(
@@ -45,12 +49,11 @@ def run(X, model=None, stats=None, bar=True):
             config.EXPANSION,
             config.DILATION,
             config.ITERS,
-            config.STRENGTH,
+            config.TARGET_MAX,
             config.TARGET_ACT,
             config.HOMEO_TIMESCALE,
-            config.EXC_SCALE,
+            config.EXC_RANGE,
             config.INH_SCALE,
-            config.MAX_INH_FAC,
             config.DTYPE
         ).to(device)
     

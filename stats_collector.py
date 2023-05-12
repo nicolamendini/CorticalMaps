@@ -21,6 +21,7 @@ from training_loop import *
 from data_imports import *
 from retina_lgn import *
 from maps_helper import *
+from scipy.optimize import curve_fit
 
 # Function to collect stats
 def run_print_stats(scalevals, kvals, X, reps=3):
@@ -45,7 +46,8 @@ def run_print_stats(scalevals, kvals, X, reps=3):
             for i in range(trials):
 
                 config.EXC_STD = scalevals[i]
-                config.EXC_SCALE = int(torch.round((config.EXC_STD)*5))
+                config.EXC_RANGE = config.EXC_STD*5
+                config.EXC_SCALE = int(torch.round(config.EXC_RANGE))
                 config.EXC_SCALE = oddenise(config.EXC_SCALE)
                 config.EXPANSION = kvals[k]/1.5
                 config.DILATION = kvals[k]
@@ -119,12 +121,13 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
     fs = 18
     
     fig = plt.figure(figsize=(ktrials*5,rows*5))
-    plt.subplots_adjust(left=0.1,
+    plt.subplots_adjust(
+                    left=0.1,
                     bottom=0.05,
                     right=0.95,
                     top=0.95,
-                    wspace=0.3,
-                    hspace=0.)
+                    hspace=0.1
+    )
     
     
     mm_conv = 0.05
@@ -134,7 +137,6 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         plt.subplot(rows,ktrials,1+k)
         ax = plt.gca()
         ax.set_box_aspect(1)
-        plt.subplots_adjust(hspace=0.4)
         plt.xticks(fontsize=fs, ticks=scale_ticks, labels=scale_ticks)
         plt.yticks(fontsize=fs)
         plt.locator_params(nbins=6)
@@ -145,11 +147,12 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         plt.ylim(0.6,1.01)
         means = ensemble_mean[k]
         stds = ensemble_err[k]
+        markers_on = means.argmax()
         plt.plot(scalevals*mm_conv, affinities[:,k].mean(0), 'k:', label='LGN to V1')
         plt.plot(scalevals*mm_conv, compressib[:,k].mean(0), 'k--', label='V1 to V2')
-        plt.plot(scalevals*mm_conv, means, color='black', label='combined')
-        plt.fill_between(scalevals*mm_conv, means - stds, means + stds, color='b', alpha=0.2)
-        plt.legend(fontsize=16, loc=(0.4,0.5))
+        plt.plot(scalevals*mm_conv, means, color='black', label='combined', markevery=[markers_on], marker='o')
+        plt.fill_between(scalevals*mm_conv, means - stds, means + stds, color='grey', alpha=0.2)
+        plt.legend(fontsize=16, loc=(0.4,0.5), frameon=False)
         
     ref_ax=0
     pad = 5
@@ -171,7 +174,7 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         plt.locator_params(nbins=6)
         #plt.tick_params(left=False,bottom=False,labelleft=False,labelbottom=False)
         best = format(float(scalevals[ensemble_mean[k].argmax()])*mm_conv, '.2f')
-        plt.title('Best Range: '+ best +'mm', fontsize=fs)
+        plt.title('Optimal Range: '+ best +'mm', fontsize=fs)
         if k==0:
             plt.ylabel('mm', fontsize=fs)
         plt.xlabel('mm', fontsize=fs)
@@ -214,6 +217,7 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         ring[~freq_mask] = torch.tensor(1)/0.
         im=ax.imshow(ring, cmap='Greys', extent=ticks_range)
         ax.plot(np.linspace(0,0.5,max_grid_size//2-1), hists_max[k,0]/4-0.5, linewidth=2, color='red')
+        ax.plot([1/(lambda_max[k]-0.2)]*2, [-0.5, 0.5], linewidth=2, linestyle=':', color='red')
         divider = make_axes_locatable(ax)
         cb = fig.colorbar(im,  cax=ax.inset_axes((0.9, 0.65, 0.05, 0.3)))
         cb.set_ticks([0, (best_rings[0,k]**2).max()])
@@ -236,7 +240,7 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         means = ratios[:,k].mean(0)/np.pi
         stds = ratios[:,k].std(0)/np.pi
         plt.errorbar(scalevals*mm_conv, means, 0, color='black')
-        plt.fill_between(scalevals*mm_conv, means - stds, means + stds, color='b', alpha=0.2)
+        plt.fill_between(scalevals*mm_conv, means - stds, means + stds, color='grey', alpha=0.2)
         plt.plot(scalevals*mm_conv, [1]*len(scalevals), color='grey', linestyle='--', linewidth=2)
     
     

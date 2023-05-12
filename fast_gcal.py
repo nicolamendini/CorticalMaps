@@ -25,12 +25,11 @@ class CorticalMap(nn.Module):
         aff_cf_dilation,
         lat_cf_dilation,
         lat_iters,
-        strength,
+        target_strength,
         homeo_target,
         homeo_timescale,
-        exc_units,
+        exc_range,
         lat_cf_units,
-        max_inh_fac,
         dtype
     ):
         
@@ -46,8 +45,9 @@ class CorticalMap(nn.Module):
         aff_cf_envelope = aff_cf_envelope.repeat(1,aff_cf_channels,1,1).view(1,-1,1)  
         self.aff_cf_envelope = aff_cf_envelope.to(device).type(self.type)
         
+        exc_units = oddenise(round(exc_range))
         exc_cutoff = get_circle(exc_units, exc_units/2)
-        sre = get_radial_cos(exc_units, exc_units)**2 * exc_cutoff
+        sre = get_radial_cos(exc_units, exc_range)**2 * exc_cutoff
         sre /= sre.sum()
         self.sre = sre.to(device).type(self.type)
         
@@ -56,13 +56,15 @@ class CorticalMap(nn.Module):
         inh_mask *= get_circle(lat_cf_units, exc_units/(2*lat_cf_dilation))
         lri_envelope = get_radial_cos(lat_cf_units, lat_cf_units)**2
         lri_envelope *= inh_cutoff
-        #lri_envelope *= 1 - inh_mask    
+        lri_envelope *= 1 - inh_mask    
         lri_envelope = lri_envelope.view(1,-1,1)
         lri_envelope /= lri_envelope.max()
         self.lri_envelope = lri_envelope.to(device).type(self.type)
         
-        self.max_r = oddenise(exc_units*2)
-        max_mask = get_circle(self.max_r, self.max_r/2).view(1,-1,1)
+        self.max_r = oddenise(round(exc_units*4))
+        max_mask = get_circle(self.max_r, self.max_r/2)
+        max_mask = (get_radial_cos(self.max_r, self.max_r)**2)*max_mask
+        max_mask = max_mask.view(1,-1,1).float()
         self.max_mask = max_mask.to(device).type(self.type)
         
         
@@ -87,7 +89,7 @@ class CorticalMap(nn.Module):
         self.avg_acts = torch.zeros(sheet_shape, device=device).type(self.type) + homeo_target
         self.lat_mean = torch.zeros(sheet_shape, device=device).type(self.type)
         self.last_lat = torch.zeros(sheet_shape, device=device).type(self.type)
-        self.inh_coef = 1
+        self.exc_coeff = torch.ones(sheet_shape, device=device).type(self.type)
         
         # storing some parameters
         self.homeo_lr = (1-homeo_timescale)
@@ -100,8 +102,8 @@ class CorticalMap(nn.Module):
         self.lat_iters = lat_iters
         self.homeo_timescale = homeo_timescale
         self.homeo_target = homeo_target
-        self.strength = strength
-        self.max_inh_fac = max_inh_fac
+        self.lat_strength_target = target_strength
+        self.strength = 1
         self.lat_mean_beta = 0.5
                                 
     def forward(self, x, reco_flag=False, learning_flag=True, print_flag=False):
@@ -122,8 +124,7 @@ class CorticalMap(nn.Module):
         if not learning_flag:
             rfs = rfs.detach()
         lat_w = lat_weights.detach() 
-        lat_w /= lat_w.shape[1]*self.float_mult
-                
+        lat_w /= lat_w.shape[1]*self.float_mult                
                                     
         # computing the afferent response
         if not reco_flag:
@@ -142,23 +143,23 @@ class CorticalMap(nn.Module):
             
         aff = aff - self.adathresh
         lat = self.last_lat
-                                
-        self.lat_iters = 10
+                        
         # reaction diffusion
         for i in range(self.lat_iters):
                                                 
             if print_flag:
                 plt.figure(figsize=(10,5))
                 plt.subplot(1,2,1)
-                plt.imshow(lat.detach().cpu()[0,0].float())
+                lat_to_plot = lat.detach().cpu()[0,0].float()
+                plt.imshow(lat_to_plot)
                 plt.subplot(1,2,2)
-                plt.imshow(self.inh_coef[0,0].cpu().float())
+                plt.imshow(self.exc_coeff[0,0].cpu().float()+lat_to_plot*0.1)
                 plt.show()
                 print('lat max {:.3f} lat min: {:.3f} inh_coef max {:.3f} inh_coef min {:.3f}'.format( 
                     lat.max(), 
                     lat.mean(),
-                    self.inh_coef.max(), 
-                    self.inh_coef.min()
+                    self.exc_coeff.max(), 
+                    self.exc_coeff.min()
                 ))
                 
             # short range excitation is applied first
@@ -168,40 +169,40 @@ class CorticalMap(nn.Module):
             
             # splitting into tiles and computing the lateral inhibitory component
             pad = self.lat_cf_units//2*self.lat_cf_dilation
-            lat_tiles = F.pad(lat, (pad,pad,pad,pad), value=0)
-            lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
-            
+            lat_tiles = F.unfold(lat, self.lat_cf_units, dilation=self.lat_cf_dilation, padding=pad)
+                        
             #print(lat_tiles.shape, neg_w.shape)
             lat_tiles = lat_tiles * self.lri_envelope            
             lat_tiles = lat_tiles.permute(2,0,1)
-            lat_neg = torch.bmm(lat_tiles, lat_w).view(1,1,self.sheet_units,self.sheet_units)
+            lat_neg = torch.bmm(lat_tiles, lat_w).view(lat.shape)       
             
-            exc_factor = self.inh_coef #0.5
-                        
-            lat = torch.relu(lat*exc_factor - lat_neg + aff)*5 #self.strength
-            #lat = torch.tanh(lat)
-
-            max_pad = self.max_r//2
-            lat_max = F.pad(lat, (max_pad, max_pad, max_pad, max_pad))
+            #progress = ((i+1)/self.lat_iters)
+            #inh = 1 + 2*(1 - progress**2)
+            lat = torch.relu(lat + aff - lat_neg*2.5) * 2.2 #*self.strength
+            scaler = self.lat_strength_target
+            lat = torch.tanh(lat*scaler)/scaler
+            #lat[lat>1.1] = 1.1
             
-            lat_max = F.unfold(lat_max, self.max_r) * self.max_mask
-            lat_max = lat_max.max(1)[0]
-            lat_max = lat_max.view(1,1,self.sheet_units,self.sheet_units)
-            #lat_max[lat_max<1] = 1
-            #lat = lat / lat_max
-        
-            sudden_change = 0
             if not reco_flag:
-                sudden_change = torch.relu(lat - self.last_lat)
-                sudden_change = F.pad(sudden_change, (max_pad, max_pad, max_pad, max_pad))
-                sudden_change = F.unfold(sudden_change, self.max_r) * self.max_mask
-                sudden_change = sudden_change.max(1)[0]
-                sudden_change = sudden_change.view(1,1,self.sheet_units,self.sheet_units)
+                # DO USE ABS OR SQUARED, BECAUSE THIS SPEEDS UP OLD BUBBLE SUPPRESSION
+                #sudden_change = torch.abs(lat - self.last_lat)
+                #exc_coeff = 1*sudden_change
+                #exc_coeff = F.unfold(exc_coeff, self.max_r, padding=self.max_r//2) * self.max_mask
+                #exc_coeff = exc_coeff.sum(1).view(lat.shape) #/ self.max_r**2
+                #exc_coeff = exc_coeff.max(1)[0].view(lat.shape)
+                #ec_weights = torch.softmax(exc_coeff * 1, dim=1)
+                #exc_coeff = exc_coeff * ec_weights
+                #exc_coeff = exc_coeff.sum(1).view(lat.shape)
+                #max_mask = self.max_mask.view(1,1,self.max_r,self.max_r)/self.max_r**2
+                #exc_coeff = F.conv2d(exc_coeff, max_mask, padding=self.max_r//2)
+                #exc_coeff = exc_coeff * self.max_mask
+                #exc_coeff = exc_coeff.max(1)[0].view(lat.shape)
+                #exc_coeff = torch.exp(-exc_coeff**2)*0.7 + 0.3
+
                 self.last_lat = lat
                 self.lat_mean = self.lat_mean*self.lat_mean_beta + (1-self.lat_mean_beta)*lat
-
-            inh_coef = torch.exp(-0.5*lat_max**2 -4*sudden_change**2)
-            self.inh_coef = self.inh_coef*self.lat_mean_beta + (1-self.lat_mean_beta)*inh_coef
+                #self.exc_coeff = self.exc_coeff*self.lat_mean_beta + (1-self.lat_mean_beta)*exc_coeff
+                #self.exc_coeff = exc_coeff
                 
             #print('a',self.inh_coef.mean(),self.inh_coef.min(),self.inh_coef.max())
             #if i==4:
@@ -223,6 +224,11 @@ class CorticalMap(nn.Module):
             self.avg_acts = self.homeo_timescale*self.avg_acts + (1-self.homeo_timescale)*self.lat_mean
             gap = (self.avg_acts-self.homeo_target)
             self.adathresh += self.homeo_lr*gap
+            
+            curr_max_lat = lat.max()
+            if curr_max_lat > 0.1:
+                self.strength -= (curr_max_lat - 1)*self.homeo_lr
+                self.strength = self.strength
                                                                                 
         return raw_aff, lat, lat_correlations, x_tiles
     

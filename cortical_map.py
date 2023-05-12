@@ -15,7 +15,7 @@ from maps_helper import *
 # Cortical Map Module
 class CorticalMap(nn.Module):
     
-    def __init__(
+    def __init__(        
         self, 
         device,
         sheet_units,
@@ -24,58 +24,64 @@ class CorticalMap(nn.Module):
         aff_cf_dilation,
         lat_cf_dilation,
         lat_iters,
-        lat_strength_target,
+        target_max,
         homeo_target,
         homeo_timescale,
-        exc_units,
+        exc_range,
         lat_cf_units,
-        inh_exc_balance
+        dtype
     ):
         
         super().__init__()
         
-        # defining connections cutoffs and masks
-        inh_cutoff = get_circle(lat_cf_units, lat_cf_units/2)    
-        exc_cutoff = get_circle(exc_units, exc_units/2)
-        aff_cutoff = get_circle(aff_cf_units, aff_cf_units/2)
-        inh_mask = get_radial_cos(lat_cf_units, exc_units/lat_cf_dilation)**2
-        inh_mask *= get_circle(lat_cf_units, exc_units/(2*lat_cf_dilation))
+        self.type = dtype
+        self.float_mult = 1e-1
         
-        # defining the lateral interaction envelopes
+        # defining the lateral interaction envelopes, connections cutoffs and masks
+        aff_cutoff = get_circle(aff_cf_units, aff_cf_units/2)
         aff_cf_envelope = get_radial_cos(aff_cf_units,aff_cf_units)**2 * aff_cutoff
         aff_cf_envelope /= aff_cf_envelope.max()
         aff_cf_envelope = aff_cf_envelope.repeat(1,aff_cf_channels,1,1).view(1,-1,1)  
-        sre = get_radial_cos(exc_units, exc_units)**2 * exc_cutoff
+        self.aff_cf_envelope = aff_cf_envelope.to(device).type(self.type)
+        
+        exc_units = int(oddenise(torch.round(exc_range)))
+        exc_cutoff = get_circle(exc_units, exc_units/2)
+        sre = get_radial_cos(exc_units, exc_range)**2 * exc_cutoff
         sre /= sre.sum()
+        self.sre = sre.to(device).type(self.type)
+        
+        inh_cutoff = get_circle(lat_cf_units, lat_cf_units/2)
+        inh_mask = get_radial_cos(lat_cf_units, exc_units/lat_cf_dilation)**2
+        inh_mask *= get_circle(lat_cf_units, exc_units/(2*lat_cf_dilation))
         lri_envelope = get_radial_cos(lat_cf_units, lat_cf_units)**2
-        lri_envelope *= 1 - inh_mask       
         lri_envelope *= inh_cutoff
+        lri_envelope *= 1 - inh_mask    
         lri_envelope = lri_envelope.view(1,-1,1)
         lri_envelope /= lri_envelope.max()
-        self.sre = sre.to(device)
-        self.lri_envelope = lri_envelope.to(device)
-        self.aff_cf_envelope = aff_cf_envelope.to(device)
+        self.lri_envelope = lri_envelope.to(device).type(self.type)        
         
         # initialising the aff weights
-        init_rfs = torch.rand(sheet_units**2, aff_cf_channels*aff_cf_units**2, 1)
-        init_rfs /= init_rfs.sum(1, keepdim=True)
-        self.rfs = nn.Parameter(init_rfs) 
+        init_rfs = torch.ones(sheet_units**2, aff_cf_channels*aff_cf_units**2,1)
+        init_rfs *= aff_cf_envelope
+        init_rfs /= init_rfs.sum(1, keepdim=True) / (aff_cf_channels*aff_cf_units**2)
+        self.rfs = nn.Parameter(init_rfs.type(self.type)) 
                 
         # and the lateral inhibitory correlation weights
-        init_lat = torch.ones(1,1,lat_cf_units,lat_cf_units)
-        init_lat = init_lat.view(1,lat_cf_units**2,1).repeat(sheet_units**2,1,1)
-        init_lat /= init_lat.sum(1, keepdim=True)
-        self.lat_weights = nn.Parameter(init_lat)
-        
+        init_lat = torch.ones(sheet_units**2,lat_cf_units**2,1)
+        init_lat *= lri_envelope
+        init_lat /= init_lat.sum(1, keepdim=True) / lat_cf_units**2
+        self.lat_weights = nn.Parameter(init_lat.type(self.type))
+                        
         # defining the variables of homeostatic adaptation
-        thresh_init = torch.zeros((1,1,sheet_units,sheet_units))
+        sheet_shape = (1,1,sheet_units,sheet_units)
+        thresh_init = torch.zeros(sheet_shape, device=device).type(self.type)
         self.adathresh = nn.Parameter(thresh_init,requires_grad=False)
-        self.avg_acts = torch.zeros((1,1,sheet_units,sheet_units), device=device) + homeo_target
-        self.lat_mean = torch.zeros((1,1,sheet_units,sheet_units), device=device)
-        self.strength = 1
+        self.avg_acts = torch.zeros(sheet_shape, device=device).type(self.type)
+        self.lat_mean = torch.zeros(sheet_shape, device=device).type(self.type)
+        self.exc_coeff = torch.ones(sheet_shape, device=device).type(self.type)
         
         # storing some parameters
-        self.homeo_lr = (1-homeo_timescale)/2
+        self.homeo_lr = (1-homeo_timescale)
         self.lat_cf_units = lat_cf_units
         self.lat_cf_dilation = lat_cf_dilation
         self.aff_cf_units = aff_cf_units
@@ -85,9 +91,10 @@ class CorticalMap(nn.Module):
         self.lat_iters = lat_iters
         self.homeo_timescale = homeo_timescale
         self.homeo_target = homeo_target
-        self.lat_strength_target = lat_strength_target
-        self.strength_lr = 1e-2
-        self.inh_exc_balance = inh_exc_balance
+        self.lat_strength_target = target_max
+        self.strength = 1
+        self.lat_mean_beta = 0.5
+        self.inh_exc_balance = 0.55
                                 
     def forward(self, x, reco_flag=False, learning_flag=True, print_flag=False):
         
@@ -95,20 +102,22 @@ class CorticalMap(nn.Module):
         lat_correlations = 0
         raw_aff = 0
         x_tiles = 0
-                
+                                 
         # ensuring that the weights stay always non negative
         with torch.no_grad():
-            self.rfs *= (self.rfs>0)
-            self.lat_weights *= (self.lat_weights>0)
-        
-        lat_w = self.lat_weights.detach()
+            self.rfs /= self.rfs.sum(1,keepdim=True) / (self.rfs.shape[1]*self.float_mult)
+            self.lat_weights /= self.lat_weights.sum(1,keepdim=True) / (self.lat_weights.shape[1]*self.float_mult)
+                                
+        lat_weights = self.lat_weights
         rfs = self.rfs
+                        
         if not learning_flag:
             rfs = rfs.detach()
+        lat_w = lat_weights.detach() 
+        lat_w /= lat_w.shape[1]*self.float_mult                
                                     
         # computing the afferent response
         if not reco_flag:
-            self.lat_mean *= 0
             dilation = 1 if self.aff_cf_dilation<1 else round(self.aff_cf_dilation)
             x_tiles = F.unfold(x, self.aff_cf_units, dilation=dilation)    
             x_tiles = x_tiles * self.aff_cf_envelope
@@ -116,7 +125,8 @@ class CorticalMap(nn.Module):
             raw_aff = torch.bmm(x_tiles, rfs)
             raw_aff = raw_aff.view(1,1,self.sheet_units,self.sheet_units)
             aff = raw_aff.detach()
-            
+            aff /= rfs.shape[1]*self.float_mult 
+                        
         # if feedback is coming, just take the feedback
         else:
             aff = x
@@ -124,8 +134,9 @@ class CorticalMap(nn.Module):
         aff = aff - self.adathresh
         lat = torch.relu(aff)
                 
+        iters = self.lat_iters//2 if reco_flag else self.lat_iters
         # reaction diffusion
-        for i in range(self.lat_iters):
+        for i in range(iters):
                                     
             if print_flag:
                 plt.figure(figsize=(10,10))
@@ -152,7 +163,7 @@ class CorticalMap(nn.Module):
             # subtracting the thresholds and applying the nonlinearities
             lat = lat*self.strength + aff
             lat = torch.tanh(torch.relu(lat))
-        
+                    
             self.lat_mean += lat
             
         if not reco_flag:
@@ -172,14 +183,16 @@ class CorticalMap(nn.Module):
             gap = (self.avg_acts-self.homeo_target)
             self.adathresh += self.homeo_lr*gap
             
-            curr_max_lat = lat.max()
+            curr_max_lat = lat.max().float()
             if curr_max_lat > 0.1:
-                self.strength -= (curr_max_lat - self.lat_strength_target)*self.strength_lr
+                self.strength -= (curr_max_lat - self.lat_strength_target)*self.homeo_lr
                                                                                 
         return raw_aff, lat, lat_correlations, x_tiles
     
     def get_rfs(self):
-        return self.rfs.detach()
+        rfs = self.rfs.detach()
+        return rfs / (rfs.shape[1]*self.float_mult)
     
     def get_lat_weights(self):
-        return self.lat_weights.detach()
+        lat_weights = self.lat_weights.detach()
+        return lat_weights / (lat_weights.shape[1]*self.float_mult)

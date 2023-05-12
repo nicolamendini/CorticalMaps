@@ -511,3 +511,13 @@ def levy_step(grid_size, x, y, min_step_size, long_step_p):
         
     return x, y
 
+# function to interpolate the tradeoff data
+# defined as the product of an exponential and a straight line
+def exp_neglin_tradeoff(data, wA, wB):
+    
+    exponential = -np.exp(-data/wA) + 0.97
+    neglin = -wB*data + 0.81
+    combined = exponential * neglin
+    
+    return combined
+
