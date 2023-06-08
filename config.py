@@ -7,76 +7,61 @@ from maps_helper import *
 
 # RETINA LGN PARAMETERS
 # ---------------------------------
-
 RET_LOG_STD = 1
-LGN_LOG_STD = 1
+LGN_LOG_STD = 1.
 HARDGC = True
-CG_EPS = 1
-SATURATION = 1/2
+CG_EPS = 1 #4
+CG_SATURATION = 0.5
 LGN_ITERS = 0
 
-# PARAMETER CONSOLE
+# V1 SETTINGS
 # ---------------------------------
-
 CROPSIZE = 38
-EXPANSION = 2.67
-ITERS = 40
+EXPANSION = 1.34
+GRID_SIZE = evenise(round(CROPSIZE*EXPANSION))
+ITERS = 30
 # relative to CROPSIZE [0,1]
-RF_STD = 4
-N_BATCHES = 3
-LR = 1e-2
 HOMEO_TIMESCALE = 0.995
-TARGET_LR_DEC = 100
-EXC_STD = 1.6
+RF_STD = 4
+EXC_STD = 3
 # TARGET_STRENGTH = 0.8 is tested and proven to be the best
-TARGET_ACT = 0.015
-TARGET_MAX = 0.8
+TARGET_ACT = 0.03
+V1_SATURATION = 0.8
+
+# TRAINING PARAMETERS
+# -----------------------------------
+N_BATCHES = 50000
+LR = 1e-3
+TARGET_LR_DEC = 10
+# fast mode is torch.float16
+DTYPE = torch.float32
 
 # FLAGS
 # ---------------------------------
-
 PRINT = False
 KEEP = False
 RECO = True
 RECOPRINT = False
 LONGRUN_MODE = False
-
-# MINOR PARAMETERS
-# ---------------------------------
-
 LEARNING = True
-LR_DECAY = (1-1/N_BATCHES*np.log(TARGET_LR_DEC))
 
-# SCALES OF THE INTERACTIONS
-EXC_RANGE = EXC_STD*5
-EXC_SCALE = max(round(EXC_RANGE),1)
-EXC_SCALE = oddenise(EXC_SCALE)
-
+# SPARSITY
 # dilation is twice the exc scale
 DILATION = max(int(EXC_STD*2.5),1)
 COMPRESSION = round(EXPANSION*3/2)
-COMPRESSION = DILATION
+DILATION = 2
+COMPRESSION = 2
 
-INH_SCALE = round(RF_STD*EXPANSION/DILATION*5)
-INH_SCALE = oddenise(INH_SCALE)
-
-RF_SIZE = round(RF_STD*EXPANSION/round(EXPANSION)*5)
-RF_SIZE = oddenise(RF_SIZE)
-
+# PLOTTING SETTINGS
+# -----------------------------------
 CORR_SAMPLES = 5
 STATS_FREQ = 1
 MAP_SAMPLS = 1000
-MAPCHOP = 12
-MAPCHOP = 0 if EXPANSION<1 else MAPCHOP
-RECO = False if EXC_SCALE<1 else RECO
-GRID_SIZE = round(CROPSIZE*EXPANSION)
-GRID_SIZE = evenise(GRID_SIZE)
-DTYPE = torch.float32
+MAPCHOP = 6 * (EXPANSION>1)
 
 # CONTINUOUS TRAINING PARAMETERS
 # -----------------------------------
-
-INPUT_SIZE = 96
-FRAMES_PER_TOY = 1 #162
+FRAMES_PER_TOY = 1 #162 is the toy set size for snallNORB
 LONG_STEP_P = 1
 MIN_STEP = 10
+

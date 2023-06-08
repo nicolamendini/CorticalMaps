@@ -12,6 +12,7 @@ from PIL import Image
 import math
 import torchvision.transforms.functional as TF
 from matplotlib.collections import LineCollection
+import matplotlib.animation as animation
 
 
 # function to make a number odd or even
@@ -391,8 +392,11 @@ def get_gini(X_eff):
     return gini
 
 # function to get the orientation map for plotting out of a set of receptive fields
-def get_orientations(rfs, ksize, grid_size, on_off_flag=True, det_steps=2, discreteness=30):
+def get_orientations(model, on_off_flag=True, det_steps=2, discreteness=100):
     
+    rfs = model.get_rfs()
+    ksize = model.rf_units
+    grid_size = model.sheet_units
     # get the gabor detectors
     detectors = get_orientation_detectors(ksize,ksize,det_steps,discreteness).to(rfs.device)
     #rfs = rfs / torch.sqrt((rfs**2).sum(1, keepdim=True))
@@ -448,13 +452,13 @@ def get_norm_loss(weights):
     return w_norm
 
 # ensemble loss
-def cosine_loss(raw_aff, lat, lat_correlations, model):
+def cosine_loss(model):
     
     #winners = torch.einsum('abcd, abcd ->',h,lat)
-    winners = (raw_aff * model.lat_mean).sum()
+    winners = (model.raw_aff * model.lat_mean).sum()
     #rfs_norm = get_norm_loss(model.rfs)    
     #lat_w_norm = get_norm_loss(model.lat_weights)
-    loss = -winners -lat_correlations #+rfs_norm +lat_w_norm
+    loss = -winners -model.lat_correlations #+rfs_norm +lat_w_norm
         
     return loss
 
@@ -462,9 +466,9 @@ def plot_absolute_phases(model,target_channel=0):
 
     # exctracting useful params
     rfs = model.get_rfs().cpu()
-    aff_units = model.aff_cf_units
+    aff_units = model.rf_units
     sheet_units = model.sheet_units
-    channels = model.aff_cf_channels
+    channels = model.rf_channels
     
     # making a meshgrid to localise any points within the aff cf
     rng = torch.arange(aff_units) - aff_units//2
@@ -508,7 +512,7 @@ def levy_step(grid_size, x, y, min_step_size, long_step_p):
     
     x = round(x) % grid_size
     y = round(y) % grid_size
-        
+            
     return x, y
 
 # function to interpolate the tradeoff data
@@ -520,4 +524,24 @@ def exp_neglin_tradeoff(data, wA, wB):
     combined = exponential * neglin
     
     return combined
+
+# function to animate an array as a useful visualisation
+def animate(array, n_frames, cmap=None): 
+    
+    fig = plt.figure(figsize=(6,6))
+    global i
+    i = -2
+    plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0);
+    im = plt.imshow(array[0], animated=True, cmap=cmap)
+
+    def updatefig(*args):
+        
+        global i
+        if (i<n_frames):
+            i += 1
+        im.set_array(array[i])
+        return im,
+
+    anim = animation.FuncAnimation(fig,updatefig,frames=n_frames,interval=300,repeat=True)
+    return anim
 

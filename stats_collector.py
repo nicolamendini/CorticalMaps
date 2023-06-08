@@ -24,7 +24,7 @@ from maps_helper import *
 from scipy.optimize import curve_fit
 
 # Function to collect stats
-def run_print_stats(scalevals, kvals, X, reps=3):
+def run_print_stats(scalevals, kvals, X, reps=2):
         
     trials = len(scalevals)
     ktrials = len(kvals)
@@ -47,7 +47,7 @@ def run_print_stats(scalevals, kvals, X, reps=3):
 
                 config.EXC_STD = scalevals[i]
                 config.EXC_RANGE = config.EXC_STD*5
-                config.EXC_SCALE = int(torch.round(config.EXC_RANGE))
+                config.EXC_SCALE = int(np.round(config.EXC_RANGE))
                 config.EXC_SCALE = oddenise(config.EXC_SCALE)
                 config.EXPANSION = kvals[k]/1.5
                 config.DILATION = kvals[k]
@@ -58,8 +58,8 @@ def run_print_stats(scalevals, kvals, X, reps=3):
                 config.RF_SIZE = oddenise(config.RF_SIZE)
                 config.MAPCHOP = kvals[k]*3
                 # INH_SCALE is constant
-                #config.INH_SCALE = round(config.RF_STD*config.EXPANSION/config.DILATION*5)
-                #config.INH_SCALE = oddenise(config.INH_SCALE)
+                config.INH_SCALE = round(config.RF_STD*config.EXPANSION/config.DILATION*5)
+                config.INH_SCALE = oddenise(config.INH_SCALE)
 
                 if config.COMPRESSION==1:
                     config.RECO = False
@@ -80,10 +80,10 @@ def run_print_stats(scalevals, kvals, X, reps=3):
                 avg_peak, spectrum, avg_hist = get_typical_dist_fourier(
                     maps[r,k,i], 
                     0, 
-                    mask=2*kvals[-1]/kvals[k], 
+                    mask=2.5*kvals[-1]/kvals[k] if kvals[k]>1, 
                     smoothing_std=config.GRID_SIZE
                 )
-                ratio = count / (config.GRID_SIZE-config.MAPCHOP*2)**2 * avg_peak**2            
+                ratio = count / (config.GRID_SIZE-config.MAPCHOP*2)**2 * avg_peak**2       
                 spectra[r,k,i] = spectrum
                 ratios[r,k,i] = ratio
                 avg_peaks[r,k,i] = avg_peak
@@ -126,7 +126,7 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
                     bottom=0.05,
                     right=0.95,
                     top=0.95,
-                    hspace=0.1
+                    hspace=0.0
     )
     
     
@@ -143,7 +143,8 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         if k==0:
             plt.ylabel('Transmission Accuracy', fontsize=fs)
         plt.xlabel('Excitation Range (mm)', fontsize=fs)
-        plt.title('Projection Sparsity: '+ str(kvals[k]), fontsize=fs)
+        best = format(float(scalevals[ensemble_mean[k].argmax()])*mm_conv, '.3f')
+        plt.title('Projection Sparsity: '+ str(kvals[k]) + '\n' + 'Optimal Range: '+ best +'mm',  fontsize=fs)
         plt.ylim(0.6,1.01)
         means = ensemble_mean[k]
         stds = ensemble_err[k]
@@ -155,15 +156,17 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         plt.legend(fontsize=16, loc=(0.4,0.5), frameon=False)
         
     ref_ax=0
-    pad = 5
     best_idxs = ensemble.mean(0).max(1,keepdim=True)[1]
     lambda_max = avg_peaks.mean(0).gather(1,best_idxs)
     best_idxs = best_idxs[:,:,None].expand(-1,-1,max_grid_size//2-1)
     hists_max = hists.mean(0).gather(1,best_idxs)
     hists_max /= hists_max.max(2,keepdim=True)[0]
     ticks_range = (-0.5,0.5,-0.5,0.5)
+    lgn_size = round(max_grid_size/kvals[-1]*1.5)
+    start = round(max_grid_size - lgn_size)//2
     for k in range(ktrials):
 
+        pad = (max_grid_size - evenise(round((config.CROPSIZE -3)*kvals[k]/1.5)))//2
         map_to_plot = best_maps[0,k]
         map_to_plot[map_to_plot==-1] = torch.tensor(1.)/0.
         map_to_plot[:pad] = torch.tensor(1.)/0.
@@ -173,10 +176,9 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         plt.subplot(rows,ktrials,ktrials*1+1+k)
         plt.locator_params(nbins=6)
         #plt.tick_params(left=False,bottom=False,labelleft=False,labelbottom=False)
-        best = format(float(scalevals[ensemble_mean[k].argmax()])*mm_conv, '.2f')
-        plt.title('Optimal Range: '+ best +'mm', fontsize=fs)
         if k==0:
             plt.ylabel('mm', fontsize=fs)
+            plt.text(start,start-3,'LGN size', fontsize=fs)
         plt.xlabel('mm', fontsize=fs)
         plt.xticks(fontsize=fs, ticks=(0,50,100), labels=(-2.5, 0, 2.5))
         plt.yticks(fontsize=fs, ticks=(0,50,100), labels=(-2.5, 0, 2.5))
@@ -199,8 +201,14 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
                             sep=5      
                         )
         ref_ax.add_artist(scalebar)
+        style = 'k-'
+        plt.plot([start,start+lgn_size],[start,start], style, linewidth=2)
+        plt.plot([start+lgn_size,start+lgn_size],[start,start+lgn_size], style, linewidth=2)
+        plt.plot([start,start],[start+lgn_size,start], style, linewidth=2)
+        plt.plot([start,start+lgn_size],[start+lgn_size,start+lgn_size], style, linewidth=2)
         
-    freq_mask = get_circle(best_rings.shape[-1], best_rings.shape[-1]/2)[0,0]
+        
+    #freq_mask = get_circle(best_rings.shape[-1], best_rings.shape[-1]/2)[0,0]
     for k in range(ktrials):
 
         plt.subplot(rows,ktrials,ktrials*2+1+k)
@@ -214,7 +222,7 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         ax = plt.gca()
         ax.set_box_aspect(1)
         ring = best_rings[0,k]**2
-        ring[~freq_mask] = torch.tensor(1)/0.
+        #ring[~freq_mask] = torch.tensor(1)/0.
         im=ax.imshow(ring, cmap='Greys', extent=ticks_range)
         ax.plot(np.linspace(0,0.5,max_grid_size//2-1), hists_max[k,0]/4-0.5, linewidth=2, color='red')
         ax.plot([1/(lambda_max[k]-0.2)]*2, [-0.5, 0.5], linewidth=2, linestyle=':', color='red')
@@ -266,8 +274,10 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
 # function to start the collection of statistics for different parameter configurations
 def collect():
     
-    X = import_norb().type(torch.float16).cuda()
-    X = X[:,:,:162,0,:,:].reshape(-1,1,config.INPUT_SIZE,config.INPUT_SIZE)
+    c = 3
+    X = import_norb().type(torch.float16).cuda()[:,:,:162,0,c:-c,c:-c]
+    input_size = X.shape[-1]
+    X = X.reshape(-1,1,input_size, input_size)
     #X = import_fruit()
     X, X_orig, X_mask = retina_lgn(
         X,
@@ -276,12 +286,10 @@ def collect():
         config.HARDGC,
         config.RF_STD,
         config.CG_EPS,
-        config.SATURATION,
+        config.CG_SATURATION,
         config.LGN_ITERS
     )
-    X = X.float()
-    X = X[torch.randperm(X.shape[0])]
-    X = X.view(-1, config.FRAMES_PER_TOY, 2, X.shape[-1], X.shape[-1])
+    X = X[:,None]
 
     affinities, compressib, maps, ratios, avg_peaks, spectra, hists, counts = run_print_stats(scalevals, kvals,X)
     plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists)
@@ -294,7 +302,6 @@ def collect():
     torch.save(spectra, 'sim_data/gcal_compressib/spectra.pt')
     torch.save(hists, 'sim_data/gcal_compressib/hists.pt')
     torch.save(counts, 'sim_data/gcal_compressib/counts.pt')
-    
     
     os.system("shutdown -h 0")
     
@@ -312,8 +319,8 @@ def plot_from_file():
     plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists)
     
     
-scalevals = torch.linspace(0,3,16)
-scalevals[0] = 0.01 
+scalevals = torch.linspace(0.2,3,15)
+#scalevals[0] = 0.01
 kvals = [1,2,3,4]
 print(scalevals)
     

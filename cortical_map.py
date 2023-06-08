@@ -19,16 +19,15 @@ class CorticalMap(nn.Module):
         self, 
         device,
         sheet_units,
-        aff_cf_units,
-        aff_cf_channels,
-        aff_cf_dilation,
-        lat_cf_dilation,
+        rf_std,
+        rf_channels,
+        rf_sparsity,
+        sre_std,
+        lat_sparsity,
         lat_iters,
-        target_max,
+        saturation,
         homeo_target,
         homeo_timescale,
-        exc_range,
-        lat_cf_units,
         dtype
     ):
         
@@ -36,162 +35,211 @@ class CorticalMap(nn.Module):
         
         self.type = dtype
         self.float_mult = 1e-1
+        self.cutoff = 5
         
         # defining the lateral interaction envelopes, connections cutoffs and masks
-        aff_cutoff = get_circle(aff_cf_units, aff_cf_units/2)
-        aff_cf_envelope = get_radial_cos(aff_cf_units,aff_cf_units)**2 * aff_cutoff
-        aff_cf_envelope /= aff_cf_envelope.max()
-        aff_cf_envelope = aff_cf_envelope.repeat(1,aff_cf_channels,1,1).view(1,-1,1)  
-        self.aff_cf_envelope = aff_cf_envelope.to(device).type(self.type)
+        # number of rf units has to compensate for the integer value of the sparsity of the rfs
+        adjusted_rf_std = rf_std*rf_sparsity/max(round(rf_sparsity),1) 
+        rf_units = oddenise(round(adjusted_rf_std*self.cutoff))
+        rf_cutoff = get_circle(rf_units, rf_units/2)
+        rf_envelope = get_gaussian(rf_units,adjusted_rf_std) * rf_cutoff
+        # repeat the same envelope for each channel
+        rf_envelope = rf_envelope.repeat(1,rf_channels,1,1).view(1,-1,1)  
+        rf_envelope /= torch.sqrt((rf_envelope**2).sum(1, keepdim=True))
+        self.rf_envelope = rf_envelope.to(device).type(self.type)
         
-        exc_units = int(oddenise(torch.round(exc_range)))
-        exc_cutoff = get_circle(exc_units, exc_units/2)
-        sre = get_radial_cos(exc_units, exc_range)**2 * exc_cutoff
+        # short range excitation
+        sre_units = oddenise(round(float(sre_std)*self.cutoff))
+        sre_cutoff = get_circle(sre_units, sre_units/2)
+        sre = get_gaussian(sre_units, sre_std) * sre_cutoff
         sre /= sre.sum()
         self.sre = sre.to(device).type(self.type)
         
-        inh_cutoff = get_circle(lat_cf_units, lat_cf_units/2)
-        inh_mask = get_radial_cos(lat_cf_units, exc_units/lat_cf_dilation)**2
-        inh_mask *= get_circle(lat_cf_units, exc_units/(2*lat_cf_dilation))
-        lri_envelope = get_radial_cos(lat_cf_units, lat_cf_units)**2
-        lri_envelope *= inh_cutoff
-        lri_envelope *= 1 - inh_mask    
+        #long range inhibition delayer mask
+        lri_std = rf_std*rf_sparsity/lat_sparsity
+        # 1 is added to the cutoff to compensate for the delayed start
+        lri_units = oddenise(round(lri_std*(self.cutoff+1)))
+        lri_cutoff = get_circle(lri_units, lri_units/2)
+        lri_mask = get_gaussian(lri_units, sre_std/lat_sparsity)
+        lri_mask = (1 - (lri_mask/lri_mask.max())) 
+        # long range inhibition envelope
+        lri_envelope = get_gaussian(lri_units, lri_std)
+        lri_envelope *= lri_mask 
+        lri_envelope *= lri_cutoff
         lri_envelope = lri_envelope.view(1,-1,1)
         lri_envelope /= lri_envelope.max()
         self.lri_envelope = lri_envelope.to(device).type(self.type)        
         
         # initialising the aff weights
-        init_rfs = torch.ones(sheet_units**2, aff_cf_channels*aff_cf_units**2,1)
-        init_rfs *= aff_cf_envelope
-        init_rfs /= init_rfs.sum(1, keepdim=True) / (aff_cf_channels*aff_cf_units**2)
+        init_rfs = torch.ones(sheet_units**2, rf_channels*rf_units**2,1)
+        init_rfs *= rf_envelope
+        init_rfs /= init_rfs.sum(1, keepdim=True) / (rf_channels*rf_units**2)
         self.rfs = nn.Parameter(init_rfs.type(self.type)) 
                 
         # and the lateral inhibitory correlation weights
-        init_lat = torch.ones(sheet_units**2,lat_cf_units**2,1)
+        init_lat = torch.ones(sheet_units**2,lri_units**2,1)
         init_lat *= lri_envelope
-        init_lat /= init_lat.sum(1, keepdim=True) / lat_cf_units**2
+        init_lat /= init_lat.sum(1, keepdim=True) / lri_units**2
         self.lat_weights = nn.Parameter(init_lat.type(self.type))
                         
         # defining the variables of homeostatic adaptation
-        sheet_shape = (1,1,sheet_units,sheet_units)
+        sheet_shape = [1,1,sheet_units,sheet_units]
         thresh_init = torch.zeros(sheet_shape, device=device).type(self.type)
         self.adathresh = nn.Parameter(thresh_init,requires_grad=False)
-        self.avg_acts = torch.zeros(sheet_shape, device=device).type(self.type)
+        self.avg_acts = torch.zeros(sheet_shape, device=device).type(self.type) + homeo_target
         self.lat_mean = torch.zeros(sheet_shape, device=device).type(self.type)
-        self.exc_coeff = torch.ones(sheet_shape, device=device).type(self.type)
+        self.lat_tracker = torch.ones([lat_iters+lat_iters//2]+sheet_shape, device=device).type(self.type)
+        self.last_lat = torch.zeros(sheet_shape, device=device).type(self.type)
+        
+        # defining the learning variables
+        self.raw_aff = 0
+        self.aff_cache = 0
+        self.lat_correlations = 0
+        self.x_tiles = 0
         
         # storing some parameters
-        self.homeo_lr = (1-homeo_timescale)
-        self.lat_cf_units = lat_cf_units
-        self.lat_cf_dilation = lat_cf_dilation
-        self.aff_cf_units = aff_cf_units
-        self.aff_cf_dilation = aff_cf_dilation
-        self.aff_cf_channels = aff_cf_channels
+        self.homeo_lr = 1e-3
+        self.strength_lr = 1e-2
+        self.lat_sparsity = lat_sparsity
+        self.rf_units = rf_units
+        self.sre_units = sre_units
+        self.lri_units = lri_units
+        self.rf_sparsity = rf_sparsity
+        self.rf_channels = rf_channels
         self.sheet_units = sheet_units
         self.lat_iters = lat_iters
         self.homeo_timescale = homeo_timescale
         self.homeo_target = homeo_target
-        self.lat_strength_target = target_max
+        self.saturation = saturation
         self.strength = 1
-        self.lat_mean_beta = 0.5
-        self.inh_exc_balance = 0.55
+        self.lat_beta = 0.5
+        
+        self.target_x_size = sheet_units
+        # tha padding should not go below an expansion of 1
+        self.target_x_size += (rf_units-1)*max(1,round(rf_sparsity))
+        
+        print(
+            '--- model initialised with rf units: {}, sre units: {}, lri units: {}'.format(
+                rf_units, 
+                sre_units, 
+                lri_units)
+        ) 
                                 
-    def forward(self, x, reco_flag=False, learning_flag=True, print_flag=False):
+    def forward(self, x, reco_flag=False, learning_flag=True):
         
         # unpacking some values
         lat_correlations = 0
+        aff = 0
         raw_aff = 0
         x_tiles = 0
+        self.lat_correlations = 0
+        self.lat_mean *= 0
                                  
         # ensuring that the weights stay always non negative
         with torch.no_grad():
+            # float mult is used to bring the numerical values to more stable ranges
+            # so instead of making avery weight average to 1, it makes it average float_mult
             self.rfs /= self.rfs.sum(1,keepdim=True) / (self.rfs.shape[1]*self.float_mult)
             self.lat_weights /= self.lat_weights.sum(1,keepdim=True) / (self.lat_weights.shape[1]*self.float_mult)
                                 
         lat_weights = self.lat_weights
         rfs = self.rfs
-                        
+                             
+        # unpacking and detaching variables to use them in computations other than learning
+        # bringing the weights back to the correct range
         if not learning_flag:
             rfs = rfs.detach()
         lat_w = lat_weights.detach() 
-        lat_w /= lat_w.shape[1]*self.float_mult                
+        #lat_w /= lat_w.shape[1]*self.float_mult     
+        lat_w = lat_w * self.lri_envelope
+        lat_w /= lat_w.sum(1,keepdim=True) + 1e-7
                                     
         # computing the afferent response
         if not reco_flag:
-            dilation = 1 if self.aff_cf_dilation<1 else round(self.aff_cf_dilation)
-            x_tiles = F.unfold(x, self.aff_cf_units, dilation=dilation)    
-            x_tiles = x_tiles * self.aff_cf_envelope
-            x_tiles = x_tiles.permute(2,0,1)
-            raw_aff = torch.bmm(x_tiles, rfs)
-            raw_aff = raw_aff.view(1,1,self.sheet_units,self.sheet_units)
-            aff = raw_aff.detach()
-            aff /= rfs.shape[1]*self.float_mult 
+            x = F.interpolate(x, self.target_x_size, mode='bilinear')
+            dilation = max(1,round(self.rf_sparsity))
+            x_tiles = F.unfold(x, self.rf_units, dilation=dilation)    
+            x_tiles = x_tiles.permute(2,1,0)
+            raw_aff = x_tiles * rfs               
+            aff = raw_aff.detach() * self.rf_envelope
+            self.aff_cache = (aff * self.rf_envelope).sum(1).view(1,1,self.sheet_units,self.sheet_units)
+            aff = aff.sum(1)
+            aff /= (self.rf_envelope * rfs.detach()).sum(1) + 1e-7
+            aff = aff.view(1,1,self.sheet_units,self.sheet_units)
+            # it is convenient to bring back the rfs to their functional range here
+            # because there are less multiplications to do after a summation
+            #aff /= rfs.shape[1]*self.float_mult 
+            raw_aff = raw_aff.sum(1).view(1,1,self.sheet_units,self.sheet_units)
+            x_tiles = x_tiles * self.rf_envelope
                         
         # if feedback is coming, just take the feedback
         else:
             aff = x
-            
-        aff = aff - self.adathresh
-        lat = torch.relu(aff)
-                
+                        
+        lat = torch.relu(aff - self.adathresh)
+        lat_pad = self.lri_units//2*self.lat_sparsity
+                        
         iters = self.lat_iters//2 if reco_flag else self.lat_iters
         # reaction diffusion
         for i in range(iters):
-                                    
-            if print_flag:
-                plt.figure(figsize=(10,10))
-                plt.imshow(lat.detach().cpu()[0,0])
-                plt.show()
-                print(lat.max(), lat.mean())
+                             
+            self.lat_tracker[i + self.lat_iters*reco_flag] = lat
                 
             # short range excitation is applied first
             pos_pad = self.sre.shape[-1]//2
-            lat = F.pad(lat, (pos_pad,pos_pad,pos_pad,pos_pad), value=self.homeo_target)
+            lat = F.pad(lat, (pos_pad,pos_pad,pos_pad,pos_pad), mode='reflect')
             lat = F.conv2d(lat, self.sre)
             
             # splitting into tiles and computing the lateral inhibitory component
-            pad = self.lat_cf_units//2*self.lat_cf_dilation
-            lat_tiles = F.pad(lat, (pad,pad,pad,pad), value=self.homeo_target)
-            lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
-            
+            lat_tiles = F.pad(lat, (lat_pad,lat_pad,lat_pad,lat_pad), value=0)
+            lat_tiles = F.unfold(lat_tiles, self.lri_units, dilation=self.lat_sparsity)
             #print(lat_tiles.shape, neg_w.shape)
-            lat_tiles = lat_tiles * self.lri_envelope            
             lat_tiles = lat_tiles.permute(2,0,1)
             lat_neg = torch.bmm(lat_tiles, lat_w).view(1,1,self.sheet_units,self.sheet_units)
-            lat = lat*(1-self.inh_exc_balance)-lat_neg*self.inh_exc_balance
             
             # subtracting the thresholds and applying the nonlinearities
-            lat = lat*self.strength + aff
-            lat = torch.tanh(torch.relu(lat))
+            lat = lat -lat_neg + 0.5*aff
+            lat = torch.relu(lat*self.strength - self.adathresh)
+            lat = torch.tanh(lat) / self.saturation
                     
-            self.lat_mean += lat
+            self.last_lat = lat
+            self.lat_mean = self.lat_mean*self.lat_beta + lat*(1-self.lat_beta)
+            
+            if not lat.sum():
+                break
             
         if not reco_flag:
             if learning_flag:
 
                 # learn the lateral correlations
-                self.lat_mean /= self.lat_iters
-                lat_tiles = F.pad(self.lat_mean, (pad,pad,pad,pad), value=self.homeo_target)
-                lat_tiles = F.unfold(lat_tiles, self.lat_cf_units, dilation=self.lat_cf_dilation)
-                lat_tiles = lat_tiles * self.lri_envelope 
+                lat_tiles = F.pad(self.lat_mean, (lat_pad,lat_pad,lat_pad,lat_pad), value=0)
+                lat_tiles = F.unfold(lat_tiles, self.lri_units, dilation=self.lat_sparsity)
                 lat_tiles = lat_tiles.permute(2,0,1)
                 weighted_lat_tiles = lat_tiles * self.lat_mean.view(self.sheet_units**2,1,1)
                 lat_correlations = torch.bmm(weighted_lat_tiles, self.lat_weights).sum()
+                self.lat_correlations = lat_correlations
                     
             # update the homeostatic variables
             self.avg_acts = self.homeo_timescale*self.avg_acts + (1-self.homeo_timescale)*self.lat_mean
             gap = (self.avg_acts-self.homeo_target)
             self.adathresh += self.homeo_lr*gap
             
-            curr_max_lat = lat.max().float()
+            c = 3
+            curr_max_lat = lat[:,:,c:-c,c:-c].max().float()
             if curr_max_lat > 0.1:
-                self.strength -= (curr_max_lat - self.lat_strength_target)*self.homeo_lr
-                                                                                
-        return raw_aff, lat, lat_correlations, x_tiles
-    
+                self.strength -= (curr_max_lat - 1)*self.strength_lr
+                
+            self.x_tiles = x_tiles
+            self.raw_aff = raw_aff
+            
+        return lat
+                   
+        
+    # helper functions to return the rfs and lat_weights
     def get_rfs(self):
         rfs = self.rfs.detach()
-        return rfs / (rfs.shape[1]*self.float_mult)
+        return rfs * self.rf_envelope
+    
     
     def get_lat_weights(self):
         lat_weights = self.lat_weights.detach()
