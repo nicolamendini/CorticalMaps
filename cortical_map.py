@@ -113,6 +113,7 @@ class CorticalMap(nn.Module):
         self.saturation = saturation
         self.strength = 1
         self.lat_beta = 0.5
+        self.aff_scaler = 0.5
         
         self.target_x_size = sheet_units
         # tha padding should not go below an expansion of 1
@@ -198,8 +199,7 @@ class CorticalMap(nn.Module):
             lat_neg = torch.bmm(lat_tiles, lat_w).view(1,1,self.sheet_units,self.sheet_units)
             
             # subtracting the thresholds and applying the nonlinearities
-            lat = lat -lat_neg + 0.5*aff
-            lat = torch.relu(lat*self.strength - self.adathresh)
+            lat = torch.relu((lat-lat_neg)*self.strength + aff*self.aff_scaler - self.adathresh)
             lat = torch.tanh(lat) / self.saturation
                     
             self.last_lat = lat
@@ -224,10 +224,8 @@ class CorticalMap(nn.Module):
             gap = (self.avg_acts-self.homeo_target)
             self.adathresh += self.homeo_lr*gap
             
-            c = 3
-            curr_max_lat = lat[:,:,c:-c,c:-c].max().float()
-            if curr_max_lat > 0.1:
-                self.strength -= (curr_max_lat - 1)*self.strength_lr
+            beta = lat.mean() / self.homeo_target
+            self.strength -= (lat.max() - 1)*self.strength_lr*beta
                 
             self.x_tiles = x_tiles
             self.raw_aff = raw_aff
@@ -237,8 +235,8 @@ class CorticalMap(nn.Module):
         
     # helper functions to return the rfs and lat_weights
     def get_rfs(self):
-        rfs = self.rfs.detach()
-        return rfs * self.rf_envelope
+        rfs = self.rfs.detach() * self.rf_envelope
+        return rfs 
     
     
     def get_lat_weights(self):

@@ -19,7 +19,7 @@ from training_helper import *
 def run(X, model=None, stats=None, bar=True):
     
     # randomly permuting the blocks of single toy sequences
-    channels = X.shape[2]
+    channels = X.shape[1]
     X = X.type(config.DTYPE)
     input_size = X.shape[-1]
     X = X.view(-1, config.FRAMES_PER_TOY, channels, input_size, input_size)
@@ -111,11 +111,12 @@ def run(X, model=None, stats=None, bar=True):
                 loss.backward()
                 optimiser.step()
             
-        scheduler.step()
-        lr = scheduler.get_last_lr()[0]
+            scheduler.step()
+            lr = scheduler.get_last_lr()[0]
         stats['lr'] = lr
                     
-        collect_stats(idx, stats, model, sample, compression_kernel)
+        if config.STATS:
+            collect_stats(idx, stats, model, sample, compression_kernel)
         
         if config.PRINT or config.RECOPRINT:
             print('abort')

@@ -24,12 +24,12 @@ from maps_helper import *
 from scipy.optimize import curve_fit
 
 # Function to collect stats
-def run_print_stats(scalevals, kvals, X, reps=2):
+def run_print_stats(scalevals, kvals, X, reps=5):
         
     trials = len(scalevals)
     ktrials = len(kvals)
 
-    max_grid_size = round(config.CROPSIZE*kvals[-1]/1.5)
+    max_grid_size = round(config.CROPSIZE*kvals[-1]/config.KAPPA)
     max_grid_size = evenise(max_grid_size)
     model = None
     affinities = torch.ones(reps,ktrials,trials)
@@ -46,20 +46,12 @@ def run_print_stats(scalevals, kvals, X, reps=2):
             for i in range(trials):
 
                 config.EXC_STD = scalevals[i]
-                config.EXC_RANGE = config.EXC_STD*5
-                config.EXC_SCALE = int(np.round(config.EXC_RANGE))
-                config.EXC_SCALE = oddenise(config.EXC_SCALE)
-                config.EXPANSION = kvals[k]/1.5
+                config.EXPANSION = kvals[k]/config.KAPPA
                 config.DILATION = kvals[k]
                 config.COMPRESSION = kvals[k]
                 config.GRID_SIZE = round(config.CROPSIZE*config.EXPANSION)
                 config.GRID_SIZE = evenise(config.GRID_SIZE)
-                config.RF_SIZE = round(config.RF_STD*config.EXPANSION/round(config.EXPANSION)*5)
-                config.RF_SIZE = oddenise(config.RF_SIZE)
                 config.MAPCHOP = kvals[k]*3
-                # INH_SCALE is constant
-                config.INH_SCALE = round(config.RF_STD*config.EXPANSION/config.DILATION*5)
-                config.INH_SCALE = oddenise(config.INH_SCALE)
 
                 if config.COMPRESSION==1:
                     config.RECO = False
@@ -80,7 +72,7 @@ def run_print_stats(scalevals, kvals, X, reps=2):
                 avg_peak, spectrum, avg_hist = get_typical_dist_fourier(
                     maps[r,k,i], 
                     0, 
-                    mask=2.5*kvals[-1]/kvals[k] if kvals[k]>1, 
+                    mask=2.5*kvals[-1]/kvals[k], 
                     smoothing_std=config.GRID_SIZE
                 )
                 ratio = count / (config.GRID_SIZE-config.MAPCHOP*2)**2 * avg_peak**2       
@@ -114,7 +106,7 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
     best_map_idxs = best_map_idxs_raw.expand(-1,-1,spectra.shape[-1],spectra.shape[-1])
     best_rings = spectra.permute(0,2,1,3,4).reshape(-1,ktrials,spectra.shape[-1],spectra.shape[-1])\
         .gather(0,best_map_idxs)
-    max_grid_size = round(config.CROPSIZE*kvals[-1]/1.5)
+    max_grid_size = round(config.CROPSIZE*kvals[-1]/config.KAPPA)
     max_grid_size = evenise(max_grid_size)
     
     rows = 4
@@ -162,11 +154,11 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
     hists_max = hists.mean(0).gather(1,best_idxs)
     hists_max /= hists_max.max(2,keepdim=True)[0]
     ticks_range = (-0.5,0.5,-0.5,0.5)
-    lgn_size = round(max_grid_size/kvals[-1]*1.5)
+    lgn_size = round(max_grid_size/kvals[-1]*config.KAPPA)
     start = round(max_grid_size - lgn_size)//2
     for k in range(ktrials):
 
-        pad = (max_grid_size - evenise(round((config.CROPSIZE -3)*kvals[k]/1.5)))//2
+        pad = (max_grid_size - evenise(round((config.CROPSIZE -3)*kvals[k]/config.KAPPA)))//2
         map_to_plot = best_maps[0,k]
         map_to_plot[map_to_plot==-1] = torch.tensor(1.)/0.
         map_to_plot[:pad] = torch.tensor(1.)/0.
@@ -221,11 +213,11 @@ def plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_pea
         plt.yticks(fontsize=fs)
         ax = plt.gca()
         ax.set_box_aspect(1)
-        ring = best_rings[0,k]**2
+        ring = best_rings[:,k].mean(0)**2
         #ring[~freq_mask] = torch.tensor(1)/0.
         im=ax.imshow(ring, cmap='Greys', extent=ticks_range)
-        ax.plot(np.linspace(0,0.5,max_grid_size//2-1), hists_max[k,0]/4-0.5, linewidth=2, color='red')
-        ax.plot([1/(lambda_max[k]-0.2)]*2, [-0.5, 0.5], linewidth=2, linestyle=':', color='red')
+        ax.plot(np.linspace(0,0.5,max_grid_size//2-1), hists_max[k,:].mean(0)/4-1/2, linewidth=2, color='red')
+        ax.plot([1/lambda_max[k]]*2, [-0.5, 0.5], linewidth=2, linestyle=':', color='red')
         divider = make_axes_locatable(ax)
         cb = fig.colorbar(im,  cax=ax.inset_axes((0.9, 0.65, 0.05, 0.3)))
         cb.set_ticks([0, (best_rings[0,k]**2).max()])
@@ -278,7 +270,9 @@ def collect():
     X = import_norb().type(torch.float16).cuda()[:,:,:162,0,c:-c,c:-c]
     input_size = X.shape[-1]
     X = X.reshape(-1,1,input_size, input_size)
-    #X = import_fruit()
+    #X = F.pad(X, (input_size-1,0,input_size-1,0), mode='reflect')
+    input_size = X.shape[-1]
+
     X, X_orig, X_mask = retina_lgn(
         X,
         config.RET_LOG_STD,
@@ -289,7 +283,6 @@ def collect():
         config.CG_SATURATION,
         config.LGN_ITERS
     )
-    X = X[:,None]
 
     affinities, compressib, maps, ratios, avg_peaks, spectra, hists, counts = run_print_stats(scalevals, kvals,X)
     plot_results(kvals, scalevals, affinities, compressib, maps, ratios, avg_peaks, spectra, hists)
@@ -320,7 +313,6 @@ def plot_from_file():
     
     
 scalevals = torch.linspace(0.2,3,15)
-#scalevals[0] = 0.01
 kvals = [1,2,3,4]
 print(scalevals)
     

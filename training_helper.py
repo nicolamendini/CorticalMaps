@@ -40,6 +40,7 @@ def init_stats_dict(stats, device, crange, cropsize):
         stats['map_tracker'] = torch.zeros(config.N_BATCHES//config.MAP_SAMPLS+1, config.GRID_SIZE, config.GRID_SIZE)
         stats['affinity_tracker'] = torch.zeros(config.N_BATCHES+1)
         stats['reco_tracker'] = torch.zeros(config.N_BATCHES+1)
+        stats['lat_tracker'] = torch.zeros((config.N_BATCHES+1,config.GRID_SIZE,config.GRID_SIZE))
     return stats
 
 # perform a reconstruction step
@@ -56,7 +57,7 @@ def reco_step(model, compression_kernel, stats, reco_target=1.15):
     gap = lat.shape[-1] - reco.shape[-1]
     reco = F.pad(reco, (0,gap,0,gap))
     #reco *= stats['reco_strength']
-    reco *= config.COMPRESSION**2 * 1.2
+    reco *= config.COMPRESSION**2 * 1.4
 
     with torch.no_grad():
         lat_reco = model(
@@ -86,7 +87,7 @@ def reco_step(model, compression_kernel, stats, reco_target=1.15):
 def plot_reco_steps(reco, sample, lat, lat_reco, compressed, diff):
     
     print('reco, sample, lat, lat_reco')
-    plt.figure(figsize=(10,10))
+    plt.figure(figsize=(9,9))
     plt.subplot(2,2,1)
     plt.imshow(reco[0,0].cpu().float())
     plt.subplot(2,2,2)
@@ -114,10 +115,11 @@ def collect_stats(idx, stats, model, sample, compression_kernel):
     x_tiles = model.x_tiles
     raw_aff = model.aff_cache
     lat = model.last_lat
+    stats['lat_tracker'][idx] = lat[0,0].cpu()
     aff_flat = raw_aff.detach().view(-1).float()
     x_norm_squared = (x_tiles**2).sum(1, keepdim=True)
-    x_norm = torch.sqrt(x_norm_squared)
-    x_unit = x_tiles / (x_norm + 1e-7)
+    #x_norm = torch.sqrt(x_norm_squared)
+    #x_unit = x_tiles / (x_norm + 1e-7)
     #x_base = (x_unit * model.rf_envelope).sum(1).view(-1)
     #x_base = x_unit.mean() * np.sqrt(x_tiles.shape[1])
     rfs_norm_squared = (rfs_det**2).sum(1, keepdim=True)
@@ -127,7 +129,9 @@ def collect_stats(idx, stats, model, sample, compression_kernel):
     rf_affinity = (cos_sims * lat.view(-1)) / (lat.sum() + 1e-7)
     rf_affinity = rf_affinity.sum()
             
-    stats['rf_affinity'] = (1-stats['fast_beta'])*stats['rf_affinity'] + stats['fast_beta']*rf_affinity
+    incorporation = lat.mean() / model.homeo_target
+    beta = incorporation * stats['fast_beta']
+    stats['rf_affinity'] = (1-beta)*stats['rf_affinity'] + beta*rf_affinity
     stats['affinity_tracker'][idx] = stats['rf_affinity']
     
     # pick some samples of global correlations, used too see how well the map decorrelates
@@ -147,8 +151,6 @@ def collect_stats(idx, stats, model, sample, compression_kernel):
         diff, lat_reco_trimmed, lat_trimmed, reco, compressed = reco_step(model, compression_kernel, stats)
         # only store the metric if it is above zero (activation is present)
         #if diff:
-        incorporation = lat_trimmed.mean() / model.homeo_target
-        beta = incorporation * stats['fast_beta']
         stats['avg_reco'] = (1-beta)*stats['avg_reco'] + beta*diff
         stats['reco_tracker'][idx] = stats['avg_reco']
         # plotting the different phases of the reconstruction

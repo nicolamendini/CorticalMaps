@@ -408,13 +408,14 @@ def get_orientations(model, on_off_flag=True, det_steps=2, discreteness=100):
         affinity = (rfs[:,0,None,None]*detectors[None]).sum([-1,-2])
     else:
         affinity = (rfs[:,1,None,None]*detectors[None]).sum([-1,-2])
-
+        
     # the phases are the arctan of the ratio between sin and cos
     phases = torch.arctan(affinity[:,:,1]/(affinity[:,:,0]+1e-11))
     magnitudes = torch.sqrt((affinity**2).sum(2))
 
     # the orientations are the gabor filters which responses had the highest magnitude
     orientations = magnitudes.max(1)[1]
+    
     phases = phases.gather(1, orientations[:,None]).view(grid_size,grid_size)
     orientations = orientations.view(grid_size,grid_size) / orientations.max() * torch.pi
     return orientations, phases
@@ -488,7 +489,7 @@ def plot_absolute_phases(model,target_channel=0):
     topography = topography.reshape(2,-1)
     topography = (topography.T.float() + c).T
 
-    plt.figure(figsize=(30,30))
+    plt.figure(figsize=(9,9))
     plt.scatter(topography[0],topography[1])
 
     # plotting the lines of the grid
@@ -497,7 +498,7 @@ def plot_absolute_phases(model,target_channel=0):
     segs2 = segs1.permute(1,0,2)
     plt.gca().add_collection(LineCollection(segs1))
     plt.gca().add_collection(LineCollection(segs2))
-    
+    plt.tight_layout()
     plt.show()
     
 # function to perform a step of a levy walk
