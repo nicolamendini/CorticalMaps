@@ -4,3 +4,6 @@ versions/
 the-small-norb-dataset-v10/
 fruit_dataset/
 .ipynb_checkpoints/
+output.txt
+restart_jupyter.sh
+nohup.out

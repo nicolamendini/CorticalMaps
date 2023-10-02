@@ -10,15 +10,16 @@ from tqdm.auto import tqdm
 import random
 import math
 import torchvision.transforms.functional as TF
+from matplotlib import cm
 
 import config
 from maps_helper import *
 
 # initialise the dictionary containing stats about the model
-def init_stats_dict(stats, device, crange, cropsize):
-    
-    if not stats:
-        stats = {}
+def init_stats_dict(stats, device, crange, cropsize, evaluating):
+            
+    if stats == {}: 
+                
         stats['rf_affinity'] = 0
         stats['reco_rf_affinity'] = 0
         stats['avg_acts'] = torch.zeros((1,1,config.GRID_SIZE,config.GRID_SIZE), device=device) + config.TARGET_ACT
@@ -32,40 +33,40 @@ def init_stats_dict(stats, device, crange, cropsize):
         stats['max_lat'] = 0
         stats['avg_input'] = torch.zeros((1,2,cropsize,cropsize), device=device)
         stats['reco_strength'] = 1
-    stats['slow_beta'] = 1e-4
-    stats['fast_beta'] = 1e-3
+    stats['slow_beta'] = 1e-4 * config.STATS_FREQ
+    stats['fast_beta'] = 1e-3 * config.STATS_FREQ
     
     # refresh these only if I'm not just plotting stuff
-    if not config.PRINT and not config.RECOPRINT:
-        stats['map_tracker'] = torch.zeros(config.N_BATCHES//config.MAP_SAMPLS+1, config.GRID_SIZE, config.GRID_SIZE)
-        stats['affinity_tracker'] = torch.zeros(config.N_BATCHES+1)
-        stats['reco_tracker'] = torch.zeros(config.N_BATCHES+1)
-        stats['lat_tracker'] = torch.zeros((config.N_BATCHES+1,config.GRID_SIZE,config.GRID_SIZE))
-    return stats
+    if not config.PRINT and not config.RECOPRINT and not evaluating:
+        stats['map_tracker'] = torch.zeros(config.N_BATCHES//(config.STATS_FREQ*10)+1, config.GRID_SIZE, config.GRID_SIZE)
+    stats['affinity_tracker'] = torch.zeros(config.N_BATCHES+1)
+    stats['reco_tracker'] = torch.zeros(config.N_BATCHES+1)
+    stats['lat_tracker'] = torch.zeros((config.N_BATCHES+1,config.GRID_SIZE,config.GRID_SIZE))
 
+    
 # perform a reconstruction step
 def reco_step(model, compression_kernel, stats, reco_target=1.15):
     
     lat = model.last_lat
     csize = compression_kernel.shape[-1]
-    border_trim = round(0.1*lat.shape[-1]) + 1
+    border_trim = round(0.*lat.shape[-1]) + 1
     # compute the reconstruction by feeding back and forth through the sparse projection
     pad = config.COMPRESSION*csize
-    indices = torch.arange(lat.shape[-1]//config.COMPRESSION)*config.COMPRESSION
-    compressed = lat[0,0,indices[:,None],indices[None]][None,None]
+    indices = torch.arange(lat.shape[-1]//config.COMPRESSION+1)*config.COMPRESSION
+    lat_sampler = F.pad(lat, (0,1,0,1), mode='reflect')
+    compressed = lat_sampler[0,0,indices[:,None],indices[None]][None,None]
     reco = F.conv_transpose2d(compressed, compression_kernel, stride=config.COMPRESSION, padding=csize//2)
     gap = lat.shape[-1] - reco.shape[-1]
     reco = F.pad(reco, (0,gap,0,gap))
     #reco *= stats['reco_strength']
-    reco *= config.COMPRESSION**2 * 1.4
+    reco *= config.COMPRESSION**2 * 1.5
 
     with torch.no_grad():
         lat_reco = model(
             reco, 
             reco_flag=True,
-            learning_flag=False 
+            learning_flag=False
         )
-        
     
     #lat_reco_max = lat_reco.max().float()
     #if lat_reco_max > 0.1:
@@ -84,32 +85,36 @@ def reco_step(model, compression_kernel, stats, reco_target=1.15):
     return diff, lat_reco_trimmed, lat_trimmed, reco, compressed
 
 # plot the steps of the reconstruction
-def plot_reco_steps(reco, sample, lat, lat_reco, compressed, diff):
+def plot_reco_steps(reco, sample, lat, lat_reco, compressed, diff, grey=True):
+    
+    cmap = None
+    if grey:
+        cmap=cm.Greys
     
     print('reco, sample, lat, lat_reco')
     plt.figure(figsize=(9,9))
     plt.subplot(2,2,1)
-    plt.imshow(reco[0,0].cpu().float())
+    plt.imshow(reco[0,0].cpu().float(), cmap=cmap)
     plt.subplot(2,2,2)
-    plt.imshow(sample[0,0].cpu().float())
+    plt.imshow(sample[0,0].cpu().float(), cmap=cmap)
     plt.subplot(2,2,3)
-    plt.imshow(lat[0,0].cpu().float())
+    plt.imshow(lat[0,0].cpu().float(), cmap=cmap)
     plt.subplot(2,2,4)
-    plt.imshow(((lat_reco).abs())[0,0].cpu().float())
+    plt.imshow(((lat_reco).abs())[0,0].cpu().float(), cmap=cmap)
     plt.show()
-    plt.imshow(compressed[0,0].cpu().float())
+    plt.imshow(compressed[0,0].cpu().float(), cmap=cmap)
     plt.show()
     print('reco max: ', reco.max())
     print('reco: ', lat_reco.max(), 'lat: ', lat.max())
     print('score: ', diff)
     
 # collect the stats for this iteration
-def collect_stats(idx, stats, model, sample, compression_kernel):
+def collect_stats(idx, stats, model, sample, compression_kernel, evaluate=False):
 
     rfs_det = model.get_rfs()
     # if it is the right time and we are not in printing mode, get a snapshot of the map
-    if idx%config.MAP_SAMPLS==0 and not config.PRINT:
-        stats['map_tracker'][idx//config.MAP_SAMPLS] = get_orientations(model)[0]
+    if not config.PRINT and not evaluate:
+        stats['map_tracker'][idx//(config.STATS_FREQ*10)] = get_orientations(model)[0]
         
     # compute the first component of the metric
     x_tiles = model.x_tiles

@@ -233,7 +233,7 @@ def get_gabor(size, theta, Lambda, psi, gamma):
 # Function to measure the typical distance between iso oriented map domains
 # Samples a certain number of orientations given by 'precision' and returns 
 # the histograms of the gaussian doughnuts that were used to fit the curve together with the peak
-def get_typical_dist_fourier(orientations, border_cut, match_std=1, precision=10, mask=1, smoothing_std=0):
+def get_typical_dist_fourier(orientations, border_cut, precision=10, mask=1, smoothing_std=0, match_std=1):
     
     # R is the size of the map after removing some padding size, must be odd thus 1 is subtractedS
     grid_size = orientations.shape[-1] - 1
@@ -242,10 +242,8 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=1, precision=10
     spectrum = 0
     avg_spectrum = torch.zeros(R,R)
     avg_peak = 0
-    hist = torch.zeros(R//2)
     avg_hist = torch.zeros(R//2)
     ang_range = torch.linspace(0, torch.pi-torch.pi/precision, precision)
-    steps = torch.fft.fftfreq(R)
 
     # average over a number of rings, given by precision
     for i in range(precision):
@@ -271,26 +269,7 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=1, precision=10
         af = torch.abs(torch.fft.fftshift(af))
         af *= ~get_circle(af.shape[-1], mask)[0,0]
         
-        # use progressively bigger doughnut funtions to find the most active radius
-        # which will correspond to the predominant frequency
-        for r in range(R//2):
-    
-            doughnut = get_doughnut(R, r, match_std)
-            prod = af * doughnut
-            hist[r] = (prod).sum()
-                        
-        argmax_p = hist.argmax()
-        peak_interpolate = steps[argmax_p]
-        
-        # interpolate between the peak value and its two neighbours to get a more accurate estimate
-        if argmax_p+1<R//2:
-            base = hist[argmax_p-2]
-            a,b,c = (hist[argmax_p-1]-base).abs(), (hist[argmax_p]-base).abs(), (hist[argmax_p+1]-base).abs()
-            tot = a+b+c
-            a /= tot
-            b /= tot
-            c /= tot
-            peak_interpolate = a*steps[argmax_p-1] + b*steps[argmax_p] + c*steps[argmax_p+1]
+        hist, peak_interpolate = match_ring(af, match_std)
             
         # add the results to the average trackers
         # 1/peak_interpolate is to convert from freq to wavelength
@@ -304,9 +283,38 @@ def get_typical_dist_fourier(orientations, border_cut, match_std=1, precision=10
     
     return avg_peak, avg_spectrum, avg_hist
 
+# function to find the peak of a fourier transform
+def match_ring(af, match_std=1):
+    
+    R = af.shape[-1]
+    hist = torch.zeros(R//2)
+    steps = torch.fft.fftfreq(R)
+    
+    # use progressively bigger doughnut funtions to find the most active radius
+    # which will correspond to the predominant frequency
+    for r in range(R//2):
+
+        doughnut = get_doughnut(R, r, match_std)
+        prod = af * doughnut
+        hist[r] = (prod).sum()
+
+    argmax_p = hist.argmax()
+    peak_interpolate = steps[argmax_p]
+
+    # interpolate between the peak value and its two neighbours to get a more accurate estimate
+    if argmax_p+1<R//2:
+        base = hist[argmax_p-2]
+        a,b,c = (hist[argmax_p-1]-base).abs(), (hist[argmax_p]-base).abs(), (hist[argmax_p+1]-base).abs()
+        tot = a+b+c
+        a /= tot
+        b /= tot
+        c /= tot
+        peak_interpolate = a*steps[argmax_p-1] + b*steps[argmax_p] + c*steps[argmax_p+1]
+            
+    return hist, peak_interpolate
 
 # Function to count the pinwheels of a map
-def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.4, ksize=5):
+def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.5, ksize=5):
     
     grid_size = orientations.shape[-1]
     final_size = grid_size-border_cut*2-1
