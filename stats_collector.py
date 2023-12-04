@@ -24,9 +24,10 @@ from maps_helper import *
 from scipy.optimize import curve_fit
 
 # PARAMETERS TO BE SIMULATED
-scalevals = torch.linspace(0.2,3,15)
-kvals = [1,2,3,4]
-reps = 3
+scalevals = torch.linspace(0,3,1)
+scalevals[0] = 0.01
+kvals = [1,2,3]
+reps = 1
 print(scalevals)
 trials = len(scalevals)
 ktrials = len(kvals)
@@ -78,8 +79,151 @@ def run_print_stats():
     plot_from_file()
     
     os.system("shutdown -h 0")
+    
+# function to collect stats about noise robustness
+def run_noise_stats():
+    
+    noise_res = torch.ones(trials, len(config.NOISE))
+    fix_noise_res = torch.ones(trials, len(config.NOISE))
+    sparse_res = torch.ones(trials, len(config.SPARSITY))
+    rf_sparse_res = torch.ones(trials, len(config.RF_SPARSITY))
+    mixed_res = torch.ones(trials, len(config.NOISE))
+    stn = torch.ones(trials, len(config.NOISE))
+    maps = torch.ones(trials, config.GRID_SIZE, config.GRID_SIZE)
+    
+    c = 3
+    X = import_norb().type(torch.float16).cuda()[:,:,:162,0,c:-c,c:-c]
+    X = X.reshape(-1,1,X.shape[-1], X.shape[-1])
+    X, X_orig, X_mask = retina_lgn(
+        X,
+        config.RET_LOG_STD,
+        config.LGN_LOG_STD,
+        config.HARDGC,
+        config.RF_STD,
+        config.CG_EPS,
+        config.CG_SATURATION,
+        config.LGN_ITERS
+    )
+    
+    for i in range(trials):
         
+        config.EXC_STD = scalevals[i]
+        config.NOISE = torch.linspace(-0.85,-7.75, 20)
+        config.NOISE = torch.exp(config.NOISE)
+        config.NOISE = [noise*(1+0.18*(2-config.EXC_STD)/2) for noise in config.NOISE]
+        
+        model, stats = run(X, bar=True, eval_at_end=config.EVALUATE)
+        
+        noise_res[i] = stats['avg_noise']
+        fix_noise_res[i] = stats['avg_fixed_noise']
+        sparse_res[i] = stats['avg_sparsity']
+        rf_sparse_res[i] = stats['avg_rf_sparsity']
+        mixed_res[i] = stats['avg_mixed_case']
+        stn[i] = stats['stn']
+        maps[i] = stats['map_tracker'][-1]
+        
+    sim_data = {
+        'avg_noise': noise_res,
+        'avg_fixed_noise': fix_noise_res,
+        'avg_sparsity': sparse_res,
+        'avg_rf_sparsity': rf_sparse_res,
+        'avg_mixed_case': mixed_res,
+        'stn': stn,
+        'maps' : maps
+    }
+    
+    torch.save(sim_data, 'sim_data/noise_tests/files_to_plot/noise_data.pt')
+    plot_noise_data()
+    #os.system("shutdown -h 0")
+    
+def plot_lambda():
+    
+    sim_data = torch.load('sim_data/noise_tests/files_to_plot/noise_data.pt')
+    maps = sim_data['maps']
+    for i in range(trials):
+        avg_peak, _, _ = get_typical_dist_fourier(
+                    maps[i], 
+                    0, 
+                    mask=0, 
+                    match_std=1
+                )
+        plt.imshow(maps[i], cmap='hsv')
+        plt.show()
+        print(avg_peak)
+    
+    
+# plot the results of the noise simulations
+def plot_noise_data():
+    
+    sim_data = torch.load('sim_data/noise_tests/files_to_plot/noise_data.pt')
+    noise_res = sim_data['avg_noise']
+    fix_noise_res = sim_data['avg_fixed_noise']
+    sparse_res = sim_data['avg_sparsity']
+    rf_sparse_res = sim_data['avg_rf_sparsity']
+    mixed_res = sim_data['avg_mixed_case']
+    stn = sim_data['stn'] / 10.
+    
+    #print(noise_res.shape, fix_noise_res.shape, sparse_res.shape, rf_sparse_res.shape, mixed_res.shape, stn.shape)
+    fs = 16
+    #plt.title('Robustness of V1 to noise, for different σ conditions',  fontsize=fs)
+    plt.figure(figsize=(12,5))
+    plt.subplot(1,2,1)
+    plt.subplots_adjust(wspace=0.12, hspace=0.3)
+    plot_var = noise_res
+    plt.xlabel('signal to noise ratio (dB)', fontsize=fs)
+    plt.ylabel('V1 output stability', fontsize=fs)
+    plt.xticks(fontsize=fs)
+    plt.yticks(fontsize=fs)
+    for i in range(plot_var.shape[0]):
+        plt.plot(stn[i], plot_var[i])
+    plt.subplot(1,2,2)
+    plot_var = fix_noise_res
+    plt.xlabel('signal to noise ratio (dB)', fontsize=fs)
+    plt.xticks(fontsize=fs)
+    plt.yticks(fontsize=fs)
+    for i in range(plot_var.shape[0]):
+        plt.plot(stn[i], plot_var[i])
+    plt.savefig('sim_data/noise_tests/noise.png', bbox_inches='tight')
+    plt.clf()
+    
+    fs = 16
+    #plt.title('Robustness of V1 to connection sparsity, for different σ conditions',  fontsize=fs)
+    plt.figure(figsize=(12,5))
+    plt.subplot(1,2,1)
+    plt.ylim(0.1,1.05)
+    plt.subplots_adjust(wspace=0.12, hspace=0.3)
+    plot_var = rf_sparse_res
+    plt.xlabel('connection density (%)', fontsize=fs)
+    plt.ylabel('V1 output stability', fontsize=fs)
+    plt.xticks(fontsize=fs)
+    plt.yticks(fontsize=fs)
+    for i in range(plot_var.shape[0]):
+        plt.plot(config.SPARSITY, plot_var[i])
+    plt.subplot(1,2,2)
+    plt.ylim(0.1,1.05)
+    plot_var = sparse_res
+    plt.xlabel('connection density (%)', fontsize=fs)
+    plt.xticks(fontsize=fs)
+    plt.yticks(fontsize=fs)
+    for i in range(plot_var.shape[0]):
+        plt.plot(config.SPARSITY, plot_var[i])
+    plt.savefig('sim_data/noise_tests/sparsity.png', bbox_inches='tight')
+    plt.clf()
+    
+    plt.figure(figsize=(6,4))
+    plot_var = mixed_res
+    #plt.title('Noise robustness with afferent and lateral sparsity',  fontsize=fs)
+    plt.xlabel('signal to noise ratio (dB)', fontsize=fs)
+    plt.ylabel('V1 output stability', fontsize=fs)
+    plt.xticks(fontsize=fs)
+    plt.yticks(fontsize=fs)
+    for i in range(plot_var.shape[0]):
+        plt.plot(stn[i], plot_var[i])
+    #ax.plot_surface(scalevals[:,None], X[None,:], sim_data)
+    plt.savefig('sim_data/noise_tests/mixed_case.png', bbox_inches='tight')
+    plt.clf()
 
+    
 # function to plot the results of many trials with different scale parameters
 def plot_from_file():
     

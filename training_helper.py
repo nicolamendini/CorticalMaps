@@ -22,6 +22,13 @@ def init_stats_dict(stats, device, crange, cropsize, evaluating):
                 
         stats['rf_affinity'] = 0
         stats['reco_rf_affinity'] = 0
+        stats['avg_noise'] = 0
+        stats['avg_corr_noise'] = 0
+        stats['avg_fixed_noise'] = 0
+        stats['avg_sparsity'] = 0
+        stats['avg_rf_sparsity'] = 0
+        stats['avg_mixed_case'] = 0
+        stats['stn'] = 0
         stats['avg_acts'] = torch.zeros((1,1,config.GRID_SIZE,config.GRID_SIZE), device=device) + config.TARGET_ACT
         stats['global_corr'] = torch.zeros(
             (config.CORR_SAMPLES,config.CORR_SAMPLES,config.GRID_SIZE,config.GRID_SIZE), 
@@ -38,10 +45,25 @@ def init_stats_dict(stats, device, crange, cropsize, evaluating):
     
     # refresh these only if I'm not just plotting stuff
     if not config.PRINT and not config.RECOPRINT and not evaluating:
-        stats['map_tracker'] = torch.zeros(config.N_BATCHES//(config.STATS_FREQ*10)+1, config.GRID_SIZE, config.GRID_SIZE)
+        stats['map_tracker'] = torch.zeros(
+            config.N_BATCHES//(config.STATS_FREQ)+1, 
+            config.GRID_SIZE, 
+            config.GRID_SIZE
+        )
+        stats['lat_tracker'] = torch.zeros((config.N_BATCHES+1,config.GRID_SIZE,config.GRID_SIZE))
+        stats['x_tracker'] = torch.zeros((config.N_BATCHES+1,2,config.CROPSIZE,config.CROPSIZE))
+        
+        
     stats['affinity_tracker'] = torch.zeros(config.N_BATCHES+1)
     stats['reco_tracker'] = torch.zeros(config.N_BATCHES+1)
-    stats['lat_tracker'] = torch.zeros((config.N_BATCHES+1,config.GRID_SIZE,config.GRID_SIZE))
+    stats['noise_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.NOISE))
+    stats['corr_noise_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.NOISE))
+    stats['fixed_noise_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.NOISE))
+    stats['sparsity_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.SPARSITY))
+    stats['rf_sparsity_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.SPARSITY))
+    stats['mixed_case_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.NOISE))
+    stats['sqr_tracker'] = torch.zeros((config.N_BATCHES+1,config.GRID_SIZE,config.GRID_SIZE))
+
 
     
 # perform a reconstruction step
@@ -72,17 +94,36 @@ def reco_step(model, compression_kernel, stats, reco_target=1.15):
     #if lat_reco_max > 0.1:
     #    stats['reco_strength'] -= (lat_reco_max - reco_target) * 1e-2
     # trimming away the borders before computing the cosine similarity to avoid border effects
-    lat_reco_trimmed = lat_reco[:,:,border_trim:-border_trim,border_trim:-border_trim].float()
-    lat_reco_trimmed_norm = torch.sqrt((lat_reco_trimmed**2).sum()) + 1e-7
-    lat_reco_trimmed_unit = lat_reco_trimmed / lat_reco_trimmed_norm
+    lat_reco_trimmed = lat_reco[:,:,border_trim:-border_trim,border_trim:-border_trim].float()   
     lat_trimmed = lat[:,:,border_trim:-border_trim,border_trim:-border_trim].float()
-    lat_trimmed_norm = torch.sqrt((lat_trimmed**2).sum()) + 1e-7
-    lat_trimmed_unit = lat_trimmed / lat_trimmed_norm
+    
+    lat_reco_trimmed_unit = normalise(lat_reco_trimmed)
+    lat_trimmed_unit = normalise(lat_trimmed)
+    
     diff = (lat_trimmed_unit * lat_reco_trimmed_unit).sum()
     #base = lat_trimmed_unit.mean() * np.sqrt(model.sheet_units**2)
     #diff = torch.relu(diff - base) / (1 - base)
         
     return diff, lat_reco_trimmed, lat_trimmed, reco, compressed
+
+# function to compute the steps of model evaluation under noise conditions
+def eval_step(model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed_noise=False, correlation=False):
+    
+    lat = model.last_lat        
+            
+    with torch.no_grad():
+        lat_variation = model(
+            model.x, 
+            noise_level=noise,
+            fixed_noise=fixed_noise,
+            sparse_masks=sparse_masks,
+            rf_sparse_masks=rf_sparse_masks,
+            learning_flag=False,
+            correlation=correlation
+        )
+    
+    return cosine_sim(lat, lat_variation)
+    
 
 # plot the steps of the reconstruction
 def plot_reco_steps(reco, sample, lat, lat_reco, compressed, diff, grey=True):
@@ -108,19 +149,19 @@ def plot_reco_steps(reco, sample, lat, lat_reco, compressed, diff, grey=True):
     print('reco: ', lat_reco.max(), 'lat: ', lat.max())
     print('score: ', diff)
     
+    
 # collect the stats for this iteration
-def collect_stats(idx, stats, model, sample, compression_kernel, evaluate=False):
+def collect_stats(idx, stats, model, sample, compression_kernel, sparse_masks, rf_sparse_masks, evaluate=False):
 
     rfs_det = model.get_rfs()
     # if it is the right time and we are not in printing mode, get a snapshot of the map
     if not config.PRINT and not evaluate:
-        stats['map_tracker'][idx//(config.STATS_FREQ*10)] = get_orientations(model)[0]
+        stats['map_tracker'][idx//(config.STATS_FREQ)] = get_orientations(model)[0]
         
     # compute the first component of the metric
     x_tiles = model.x_tiles
     raw_aff = model.aff_cache
     lat = model.last_lat
-    stats['lat_tracker'][idx] = lat[0,0].cpu()
     aff_flat = raw_aff.detach().view(-1).float()
     x_norm_squared = (x_tiles**2).sum(1, keepdim=True)
     #x_norm = torch.sqrt(x_norm_squared)
@@ -134,8 +175,7 @@ def collect_stats(idx, stats, model, sample, compression_kernel, evaluate=False)
     rf_affinity = (cos_sims * lat.view(-1)) / (lat.sum() + 1e-7)
     rf_affinity = rf_affinity.sum()
             
-    incorporation = lat.mean() / model.homeo_target
-    beta = incorporation * stats['fast_beta']
+    beta = stats['fast_beta']
     stats['rf_affinity'] = (1-beta)*stats['rf_affinity'] + beta*rf_affinity
     stats['affinity_tracker'][idx] = stats['rf_affinity']
     
@@ -149,7 +189,12 @@ def collect_stats(idx, stats, model, sample, compression_kernel, evaluate=False)
     stats['avg_acts'] = (1-stats['fast_beta'])*stats['avg_acts'] + stats['fast_beta']*model.lat_mean
     avg_acts_mean = stats['avg_acts'].mean()
     stats['threshs'] = model.adathresh.mean()
-    
+            
+    # store the max of the activations to assess whether the automatic strength tuning works
+    curr_max_lat = lat.float().max()
+    if curr_max_lat > 0.1:
+        stats['max_lat'] = (1-stats['fast_beta'])*stats['max_lat'] + stats['fast_beta']*curr_max_lat
+        
     # if flag is on, perform a step of the reconstruction and store the metric
     if config.RECO or config.RECOPRINT:
         # getting the reconstruction score
@@ -162,10 +207,45 @@ def collect_stats(idx, stats, model, sample, compression_kernel, evaluate=False)
         if config.RECOPRINT and not config.PRINT:
             plot_reco_steps(reco, sample, lat_trimmed, lat_reco_trimmed, compressed, diff)
             
-    # store the max of the activations to assess whether the automatic strength tuning works
-    curr_max_lat = lat.float().max()
-    if curr_max_lat > 0.1:
-        stats['max_lat'] = (1-stats['fast_beta'])*stats['max_lat'] + stats['fast_beta']*curr_max_lat
+    if False:
+        if config.NOISE:
+            # run one step of noise evaluation
+            stats['noise_tracker'][idx] = torch.tensor(
+                [eval_step(model, noise=config.NOISE[i]) 
+                 for i in range(len(config.NOISE))]
+            )
+            stats['fixed_noise_tracker'][idx] = torch.tensor(
+                [eval_step(model, noise=config.NOISE[i], fixed_noise=True) 
+                for i in range(len(config.NOISE))]
+            )
+
+            # run one step of correlated noise evaluation
+            stats['corr_noise_tracker'][idx] = torch.tensor(
+                [eval_step(model, noise=config.NOISE[i], correlation=True) 
+                 for i in range(len(config.NOISE))]
+            )
+
+        if config.SPARSITY:
+            # run one step of sparsity evaluation
+            stats['sparsity_tracker'][idx] = torch.tensor(
+                [eval_step(model, sparse_masks=sparse_masks[i]) 
+                 for i in range(len(config.SPARSITY))]
+            )
+
+        if config.RF_SPARSITY:
+            # run one step of RF sparsity evaluation
+            stats['rf_sparsity_tracker'][idx] = torch.tensor(
+                [eval_step(model, rf_sparse_masks=rf_sparse_masks[i]) 
+                 for i in range(len(config.RF_SPARSITY))]
+            )
+
+        # arbitrarily mixed case
+        if False:
+            stats['mixed_case_tracker'][idx] = torch.tensor(
+                [eval_step(model, noise=config.NOISE[i], rf_sparse_masks=rf_sparse_masks[-3], correlation=True) 
+                 for i in range(len(config.NOISE))]
+            )
+                
 
 # update the progress bar with the new values
 def update_progress_bar(progress_bar, stats):

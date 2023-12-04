@@ -13,8 +13,9 @@ import torchvision.transforms.functional as TF
 
 import config
 from maps_helper import *
-from fast_gcal import *
+from cortical_map import *
 from training_helper import *
+import nn_template
 
 def run(X, model=None, stats=None, bar=True, eval_at_end=False):
         
@@ -42,6 +43,10 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False):
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda().type(config.DTYPE)
     
+    sparse_masks = get_weight_masks(config.SPARSITY, model.lat_weights.shape).cuda().type(config.DTYPE)
+    rf_sparse_masks = get_weight_masks(config.RF_SPARSITY, model.rfs.shape).cuda().type(config.DTYPE)
+    
+        
     # defining the variables for the saccades
     input_pad = round(config.RF_STD*model.cutoff)//2
     cropsize = config.CROPSIZE + input_pad*2
@@ -104,8 +109,11 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False):
             lr = scheduler.get_last_lr()[0]
         stats['lr'] = lr
                     
+        stats['lat_tracker'][idx] = model.last_lat[0,0].cpu()
+        stats['x_tracker'][idx] = sample[:,:,input_pad:-input_pad,input_pad:-input_pad]
+        stats['sqr_tracker'][idx] = model.sqr_lat[0,0].cpu() / config.ITERS
         if idx%config.STATS_FREQ==0:
-            collect_stats(idx, stats, model, sample, compression_kernel, not eval_at_end)
+            collect_stats(idx, stats, model, sample, compression_kernel, sparse_masks, rf_sparse_masks, not eval_at_end)
         
         if config.PRINT or config.RECOPRINT:
             print('abort')
@@ -115,7 +123,8 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False):
             update_progress_bar(progress_bar, stats)
             progress_bar.update()
       
-    if eval_at_end:
+    #train_NN(stats)
+    if eval_at_end and False:
         prev_batch = config.N_BATCHES
         prev_stat = config.STATS_FREQ
         config.STATS_FREQ = 1
@@ -123,13 +132,31 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False):
         run(X, model, stats, bar=False)
         config.STATS_FREQ = prev_stat
         config.N_BATCHES = prev_batch
-        lat_factors = stats['lat_tracker'].sum([-1,-2])
-        lat_factors /= lat_factors.sum()
-        stats['avg_reco'] = (stats['reco_tracker']*lat_factors).sum()
-        stats['rf_affinity'] = (stats['affinity_tracker']*lat_factors).sum()
-        print('final stats, affinity:', format(stats['rf_affinity'], '.3f'), ' reco: ', format(stats['avg_reco'], '.3f'))
+        stats['avg_reco'] = (stats['reco_tracker']).mean()
+        stats['rf_affinity'] = (stats['affinity_tracker']).mean()
+        stats['avg_noise'] = (stats['noise_tracker']).mean(0)
+        stats['avg_corr_noise'] = (stats['corr_noise_tracker']).mean(0)
+        stats['avg_fixed_noise'] = (stats['fixed_noise_tracker']).mean(0)
+        stats['avg_sparsity'] = (stats['sparsity_tracker']).mean(0)
+        stats['avg_rf_sparsity'] = (stats['rf_sparsity_tracker']).mean(0)
+        stats['avg_mixed_case'] = (stats['mixed_case_tracker']).mean(0)
+        sig_pow = (stats['sqr_tracker']).mean()
+        stats['stn'] = torch.tensor([round(10*math.log10(sig_pow/noise**2)) for noise in config.NOISE])
+        print('final stats, affinity: {:.3f} reco {:.3f}'.format(
+            stats['rf_affinity'],
+            stats['avg_reco']
+            )
+        )
+        print('avg_fixed noise: ', stats['avg_fixed_noise'])
+        print('avg noise: ', stats['avg_noise'])
+        print('avg corr noise: ', stats['avg_corr_noise'])
+        print('signal to noise: ', stats['stn'])
+        print('avg sparsity: ', stats['avg_sparsity'])
+        print('avg RF sparsity: ', stats['avg_rf_sparsity'])
+        print('mixed case: ', stats['avg_mixed_case'])
             
     return model, stats
+
 
 def new_model(X):
     return CorticalMap(
@@ -146,3 +173,66 @@ def new_model(X):
         config.HOMEO_TIMESCALE,
         config.DTYPE
     ).to(X.device)
+
+def train_NN(stats, debug=False):
+    
+    samples = 10000
+    X = stats['lat_tracker'][-samples:,None].cuda()
+    Y = stats['x_tracker'][-samples:].cuda()
+    stats['nn_loss_tracker'] = torch.zeros(config.NN_EPOCHS)
+    
+    split = round(samples*0.8)
+    X_train = X[:split]
+    Y_train = Y[:split]
+    X_test = X[split:]
+    Y_test = Y[split:]
+    
+    input_size = X.shape[-1]
+    output_size = Y.shape[-1]
+    w = 5
+    network_hidden = [
+        ('flatten', 1, input_size**2),
+        #('unflatten', 1, size*2),
+        #('conv2d', 64, 41),
+        #('pool2d', 64, 2),
+        #('conv2d', 64, w),
+        #('conv2d', 32, w),
+        #('conv2d', 16, w),
+        #('conv2d', 8, w),
+        #('conv2d', 16, w),
+        #('conv2d', 2, w),
+        ('dense', 2*output_size**2, input_size**2),
+        #('dense', 2*size**2, 2*size**2),
+        ('unflatten', 2, output_size)
+    ]
+    
+    
+    stats['network'] = nn_template.Network(network_hidden, device=X.device , bias=config.BIAS)
+    params_list = [list(stats['network'].layers[l].parameters()) for l in range(len(network_hidden))]
+    params_list = sum(params_list, [])
+    optim = torch.optim.Adam(params_list, lr=1e-4)
+    loss_avg = 0
+    beta = 0.99
+    
+    progress_bar = tqdm(range(config.NN_EPOCHS))
+    for b in progress_bar:
+        
+        batch_idx = torch.randint(0, split, (config.BSIZE,))
+        x_b = X_train[batch_idx]
+        y_b = Y_train[batch_idx]
+                
+        reco = torch.relu(stats['network'](x_b, debug=debug))
+        loss = ((y_b - reco)**2).sum([1,2,3]).mean() + (stats['network'].layers[1].weight.abs()).sum()*1e-3
+        stats['nn_loss_tracker'][b] = int(loss.detach())
+        
+        optim.zero_grad()
+        loss.backward()
+        optim.step()
+        
+        loss_avg = beta*loss_avg + (1-beta)*stats['nn_loss_tracker'][b]
+        progress_bar.set_description("reco loss: " + str(int(loss_avg)))
+        
+    test_reco = torch.relu(stats['network'](X_test, debug=debug))
+    test_loss = ((Y_test - test_reco)**2).sum([1,2,3]).mean()
+    stats['test_loss'] = test_loss.detach()
+        

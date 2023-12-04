@@ -76,6 +76,19 @@ def get_gaussian(size, std, yscale=1, centre_x=0, centre_y=0):
         
     return gaussian 
 
+# return euclidean distance
+def get_linear(size):
+    
+    distance = torch.arange(size) - size//2
+    x = distance.expand(1,1,size,size)**2
+    distance = torch.arange(size) - size//2
+    y = (distance.expand(1,1,size,size)**2).transpose(-1,-2)
+    t = torch.sqrt(x + y)
+    t = t / t[:,:,0,size//2]
+    t = torch.relu(1 - t)
+        
+    return t 
+
 
 # Function to get a doughnut function which is 
 # defined as a Gaussian Ring around a radius value with a certain STD
@@ -372,7 +385,7 @@ def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.5
 def cosine_sim(X_target, X_eff):
     
     cos_sim = (X_target*X_eff).sum()
-    cos_sim /= torch.sqrt((X_target**2).sum()) * torch.sqrt((X_eff**2).sum())
+    cos_sim /= torch.sqrt((X_target**2).sum()) * torch.sqrt((X_eff**2).sum()) + 1e-11
     return cos_sim
 
 # Normalised Mean Absolute Error
@@ -535,7 +548,7 @@ def exp_neglin_tradeoff(data, wA, wB):
     return combined
 
 # function to animate an array as a useful visualisation
-def animate(array, n_frames, cmap=None): 
+def animate(array, n_frames, cmap=None, interval=300): 
     
     fig = plt.figure(figsize=(6,6))
     global i
@@ -551,6 +564,26 @@ def animate(array, n_frames, cmap=None):
         im.set_array(array[i])
         return im,
 
-    anim = animation.FuncAnimation(fig,updatefig,frames=n_frames,interval=300,repeat=True)
+    anim = animation.FuncAnimation(fig,updatefig,frames=n_frames,interval=interval,repeat=True)
     return anim
+
+# function to normalise a tensor along some dimensions
+def normalise(tensor, dims=None):
+        
+    tensor_norm = torch.sqrt((tensor**2).sum(dims, keepdim=True)) + 1e-7
+    return tensor / tensor_norm
+
+# function to create random sparse mask where each weight has exactly a certain percentage of units ON
+def get_weight_masks(param_configs, target_shape):
+    # sparsity weights
+    n_conditions = len(param_configs)
+    sparse_masks = torch.ones([n_conditions,*target_shape])
+    for eps in range(n_conditions):
+        for i in range(target_shape[0]):
+            # select some random weights inside the mask and turn them into zeros
+            end_selection = round((1-param_configs[eps])*target_shape[1])
+            end_selection = end_selection-5 if end_selection==target_shape[1] else end_selection
+            zero_locations = torch.randperm(target_shape[1])[:end_selection]
+            sparse_masks[eps,i,zero_locations,0] = 0
+    return sparse_masks
 
