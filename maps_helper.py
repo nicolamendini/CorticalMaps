@@ -587,3 +587,7 @@ def get_weight_masks(param_configs, target_shape):
             sparse_masks[eps,i,zero_locations,0] = 0
     return sparse_masks
 
+def get_fisher_kurtosis(data):
+    data = torch.tensor(data)
+    return data.mean()**2 - data.std()**2
+

@@ -15,7 +15,7 @@ def retina_lgn(
     saturation,
     lgn_iters,
     target_max=1,
-    eps_thresh=1e-3
+    eps_thresh=1e-2
 ):
     
     # simulating the retinal processes
@@ -129,8 +129,8 @@ def plot_input_stats(X, X_orig, X_mask, size):
         cos_sim += cosine_sim(X_orig[i][X_mask[i]], X[i][X_mask[i]])
     cos_sim /= X.shape[0]
 
-    dists = (x_plot_off - x_off_mean)**4 / x_plot_off.std()**4
-    kurtosis = dists.mean()
+    kurt_on = get_fisher_kurtosis(x_plot_on)
+    kurt_off = get_fisher_kurtosis(x_plot_off)
     general_std = (x_plot_on.std() + x_plot_off.std())/2
     rmse = 1-torch.sqrt((X_orig - X)**2).mean()
 
@@ -160,7 +160,6 @@ def plot_input_stats(X, X_orig, X_mask, size):
 
     print('cosine similarity:', cos_sim)
     print('std: ', general_std)
-    print('kurtosis: ', kurtosis)
-    print('combined (k+cos): ', cos_sim/kurtosis)
+    print('kurtosis: ', kurt_on, kurt_off)
     print('combined (std/rmse): ', general_std*rmse)
     print(X.shape)

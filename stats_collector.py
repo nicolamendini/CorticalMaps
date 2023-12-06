@@ -24,7 +24,7 @@ from maps_helper import *
 from scipy.optimize import curve_fit
 
 # PARAMETERS TO BE SIMULATED
-scalevals = torch.linspace(0,3,1)
+scalevals = torch.linspace(0,2.1,4)
 scalevals[0] = 0.01
 kvals = [1,2,3]
 reps = 1
@@ -88,7 +88,6 @@ def run_noise_stats():
     sparse_res = torch.ones(trials, len(config.SPARSITY))
     rf_sparse_res = torch.ones(trials, len(config.RF_SPARSITY))
     mixed_res = torch.ones(trials, len(config.NOISE))
-    stn = torch.ones(trials, len(config.NOISE))
     maps = torch.ones(trials, config.GRID_SIZE, config.GRID_SIZE)
     
     c = 3
@@ -108,9 +107,6 @@ def run_noise_stats():
     for i in range(trials):
         
         config.EXC_STD = scalevals[i]
-        config.NOISE = torch.linspace(-0.85,-7.75, 20)
-        config.NOISE = torch.exp(config.NOISE)
-        config.NOISE = [noise*(1+0.18*(2-config.EXC_STD)/2) for noise in config.NOISE]
         
         model, stats = run(X, bar=True, eval_at_end=config.EVALUATE)
         
@@ -119,7 +115,6 @@ def run_noise_stats():
         sparse_res[i] = stats['avg_sparsity']
         rf_sparse_res[i] = stats['avg_rf_sparsity']
         mixed_res[i] = stats['avg_mixed_case']
-        stn[i] = stats['stn']
         maps[i] = stats['map_tracker'][-1]
         
     sim_data = {
@@ -128,13 +123,12 @@ def run_noise_stats():
         'avg_sparsity': sparse_res,
         'avg_rf_sparsity': rf_sparse_res,
         'avg_mixed_case': mixed_res,
-        'stn': stn,
         'maps' : maps
     }
     
     torch.save(sim_data, 'sim_data/noise_tests/files_to_plot/noise_data.pt')
     plot_noise_data()
-    #os.system("shutdown -h 0")
+    os.system("shutdown -h 0")
     
 def plot_lambda():
     
@@ -161,7 +155,8 @@ def plot_noise_data():
     sparse_res = sim_data['avg_sparsity']
     rf_sparse_res = sim_data['avg_rf_sparsity']
     mixed_res = sim_data['avg_mixed_case']
-    stn = sim_data['stn'] / 10.
+
+    stn = 10 * torch.log10(0.25 / torch.tensor(config.NOISE)**2)
     
     #print(noise_res.shape, fix_noise_res.shape, sparse_res.shape, rf_sparse_res.shape, mixed_res.shape, stn.shape)
     fs = 16
@@ -175,14 +170,14 @@ def plot_noise_data():
     plt.xticks(fontsize=fs)
     plt.yticks(fontsize=fs)
     for i in range(plot_var.shape[0]):
-        plt.plot(stn[i], plot_var[i])
+        plt.plot(stn, plot_var[i])
     plt.subplot(1,2,2)
     plot_var = fix_noise_res
     plt.xlabel('signal to noise ratio (dB)', fontsize=fs)
     plt.xticks(fontsize=fs)
     plt.yticks(fontsize=fs)
     for i in range(plot_var.shape[0]):
-        plt.plot(stn[i], plot_var[i])
+        plt.plot(stn, plot_var[i])
     plt.savefig('sim_data/noise_tests/noise.png', bbox_inches='tight')
     plt.clf()
     
@@ -218,7 +213,7 @@ def plot_noise_data():
     plt.xticks(fontsize=fs)
     plt.yticks(fontsize=fs)
     for i in range(plot_var.shape[0]):
-        plt.plot(stn[i], plot_var[i])
+        plt.plot(stn, plot_var[i])
     #ax.plot_surface(scalevals[:,None], X[None,:], sim_data)
     plt.savefig('sim_data/noise_tests/mixed_case.png', bbox_inches='tight')
     plt.clf()

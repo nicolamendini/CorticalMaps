@@ -28,7 +28,6 @@ def init_stats_dict(stats, device, crange, cropsize, evaluating):
         stats['avg_sparsity'] = 0
         stats['avg_rf_sparsity'] = 0
         stats['avg_mixed_case'] = 0
-        stats['stn'] = 0
         stats['avg_acts'] = torch.zeros((1,1,config.GRID_SIZE,config.GRID_SIZE), device=device) + config.TARGET_ACT
         stats['global_corr'] = torch.zeros(
             (config.CORR_SAMPLES,config.CORR_SAMPLES,config.GRID_SIZE,config.GRID_SIZE), 
@@ -44,7 +43,7 @@ def init_stats_dict(stats, device, crange, cropsize, evaluating):
     stats['fast_beta'] = 1e-3 * config.STATS_FREQ
     
     # refresh these only if I'm not just plotting stuff
-    if not config.PRINT and not config.RECOPRINT and not evaluating:
+    if not config.PRINT and not config.RECOPRINT and not evaluating and config.N_BATCHES:
         stats['map_tracker'] = torch.zeros(
             config.N_BATCHES//(config.STATS_FREQ)+1, 
             config.GRID_SIZE, 
@@ -53,16 +52,15 @@ def init_stats_dict(stats, device, crange, cropsize, evaluating):
         stats['lat_tracker'] = torch.zeros((config.N_BATCHES+1,config.GRID_SIZE,config.GRID_SIZE))
         stats['x_tracker'] = torch.zeros((config.N_BATCHES+1,2,config.CROPSIZE,config.CROPSIZE))
         
-        
-    stats['affinity_tracker'] = torch.zeros(config.N_BATCHES+1)
-    stats['reco_tracker'] = torch.zeros(config.N_BATCHES+1)
-    stats['noise_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.NOISE))
-    stats['corr_noise_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.NOISE))
-    stats['fixed_noise_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.NOISE))
-    stats['sparsity_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.SPARSITY))
-    stats['rf_sparsity_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.SPARSITY))
-    stats['mixed_case_tracker'] = torch.zeros(config.N_BATCHES+1, len(config.NOISE))
-    stats['sqr_tracker'] = torch.zeros((config.N_BATCHES+1,config.GRID_SIZE,config.GRID_SIZE))
+    batches = config.N_BATCHES+1 if not evaluating else config.EVAL_BATCHES+1
+    stats['affinity_tracker'] = torch.zeros(batches)
+    stats['reco_tracker'] = torch.zeros(batches)
+    stats['noise_tracker'] = torch.zeros(batches, len(config.NOISE))
+    stats['corr_noise_tracker'] = torch.zeros(batches, len(config.NOISE))
+    stats['fixed_noise_tracker'] = torch.zeros(batches, len(config.NOISE))
+    stats['sparsity_tracker'] = torch.zeros(batches, len(config.SPARSITY))
+    stats['rf_sparsity_tracker'] = torch.zeros(batches, len(config.SPARSITY))
+    stats['mixed_case_tracker'] = torch.zeros(batches, len(config.NOISE))
 
 
     
@@ -107,7 +105,7 @@ def reco_step(model, compression_kernel, stats, reco_target=1.15):
     return diff, lat_reco_trimmed, lat_trimmed, reco, compressed
 
 # function to compute the steps of model evaluation under noise conditions
-def eval_step(model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed_noise=False, correlation=False):
+def eval_step(stats, model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed_noise=False, correlation=False):
     
     lat = model.last_lat        
             
@@ -121,8 +119,20 @@ def eval_step(model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed_noise=
             learning_flag=False,
             correlation=correlation
         )
+        
+    #plt.imshow(lat_variation[0,0].cpu())
+    #plt.show()
+        
+    reco = torch.tanh(stats['network'](lat_variation.view(1,-1)))
     
-    return cosine_sim(lat, lat_variation)
+    #plt.imshow(reco.detach().cpu().view(2,38,38)[0])
+    #plt.show()
+    
+    pad = model.rf_units//2
+    loss = (reco.flatten() - model.x[:,:,pad:-pad,pad:-pad].flatten())**2
+    score = 1 - loss.mean()    
+            
+    return score #cosine_sim(lat, lat_variation)
     
 
 # plot the steps of the reconstruction
@@ -207,42 +217,42 @@ def collect_stats(idx, stats, model, sample, compression_kernel, sparse_masks, r
         if config.RECOPRINT and not config.PRINT:
             plot_reco_steps(reco, sample, lat_trimmed, lat_reco_trimmed, compressed, diff)
             
-    if False:
+    if evaluate:
         if config.NOISE:
             # run one step of noise evaluation
             stats['noise_tracker'][idx] = torch.tensor(
-                [eval_step(model, noise=config.NOISE[i]) 
+                [eval_step(stats, model, noise=config.NOISE[i]) 
                  for i in range(len(config.NOISE))]
             )
             stats['fixed_noise_tracker'][idx] = torch.tensor(
-                [eval_step(model, noise=config.NOISE[i], fixed_noise=True) 
+                [eval_step(stats, model, noise=config.NOISE[i], fixed_noise=True) 
                 for i in range(len(config.NOISE))]
             )
 
             # run one step of correlated noise evaluation
             stats['corr_noise_tracker'][idx] = torch.tensor(
-                [eval_step(model, noise=config.NOISE[i], correlation=True) 
+                [eval_step(stats, model, noise=config.NOISE[i], correlation=True) 
                  for i in range(len(config.NOISE))]
             )
 
-        if config.SPARSITY:
+        if config.SPARSITY and False:
             # run one step of sparsity evaluation
             stats['sparsity_tracker'][idx] = torch.tensor(
-                [eval_step(model, sparse_masks=sparse_masks[i]) 
+                [eval_step(stats, model, sparse_masks=sparse_masks[i]) 
                  for i in range(len(config.SPARSITY))]
             )
 
-        if config.RF_SPARSITY:
+        if config.RF_SPARSITY and False:
             # run one step of RF sparsity evaluation
             stats['rf_sparsity_tracker'][idx] = torch.tensor(
-                [eval_step(model, rf_sparse_masks=rf_sparse_masks[i]) 
+                [eval_step(stats, model, rf_sparse_masks=rf_sparse_masks[i]) 
                  for i in range(len(config.RF_SPARSITY))]
             )
 
         # arbitrarily mixed case
         if False:
             stats['mixed_case_tracker'][idx] = torch.tensor(
-                [eval_step(model, noise=config.NOISE[i], rf_sparse_masks=rf_sparse_masks[-3], correlation=True) 
+                [eval_step(stats, model, noise=config.NOISE[i], rf_sparse_masks=rf_sparse_masks[-3], correlation=True) 
                  for i in range(len(config.NOISE))]
             )
                 

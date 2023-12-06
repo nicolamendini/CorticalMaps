@@ -96,7 +96,7 @@ class CorticalMap(nn.Module):
         self.lat_mean = torch.zeros(sheet_shape, device=device).type(self.type)
         self.lat_tracker = torch.ones([lat_iters]+sheet_shape, device=device).type(self.type)
         self.last_lat = torch.zeros(sheet_shape, device=device).type(self.type)
-        self.sqr_lat = torch.zeros(sheet_shape, device=device).type(self.type)
+        self.aff = torch.zeros(sheet_shape, device=device).type(self.type)
         self.x = None
         
         # defining the learning variables
@@ -107,7 +107,7 @@ class CorticalMap(nn.Module):
         
         # storing some parameters
         self.homeo_lr = 1e-3
-        self.strength_lr = 1e-2
+        #self.strength_lr = 1e-2
         self.lat_sparsity = lat_sparsity
         self.rf_units = rf_units
         self.sre_units = sre_units
@@ -121,8 +121,10 @@ class CorticalMap(nn.Module):
         self.saturation = saturation
         self.strength = 1
         self.lat_beta = 0.5
-        self.aff_scaler = 0.5
+        self.aff_scaler = 1
         self.lat_reset = True
+        self.sig_pow_target = 0.38
+        self.avg_sig_pow = self.sig_pow_target
         
         self.target_x_size = sheet_units
         # tha padding should not go below an expansion of 1
@@ -150,13 +152,12 @@ class CorticalMap(nn.Module):
         # unpacking some values
         lat_correlations = 0
         aff = 0
-        lat = 0
+        lat = self.last_lat
         noise = 0
         raw_aff = 0
         x_tiles = 0
         self.lat_correlations = 0
         self.lat_mean *= 0
-        self.sqr_lat *= 0
                                  
         # ensuring that the weights stay always non negative
         with torch.no_grad():
@@ -183,13 +184,12 @@ class CorticalMap(nn.Module):
         # computing the afferent response
         if not reco_flag:
             
-            x = F.interpolate(x, self.target_x_size, mode='bilinear')
             self.x = x
+            x = F.interpolate(x, self.target_x_size, mode='bilinear')
             
             if correlation:
                 corr_noise = torch.randn(x.shape, device=x.device, dtype=x.dtype) * noise_level
                 x = torch.relu(x + corr_noise)
-                x[x>1] = 1.
             
             dilation = max(1,round(self.rf_sparsity))
             x_tiles = F.unfold(x, self.rf_units, dilation=dilation)    
@@ -200,6 +200,7 @@ class CorticalMap(nn.Module):
             aff = aff.sum(1)
             aff /= (self.rf_envelope * rfs.detach()).sum(1) + 1e-7
             aff = aff.view(1,1,self.sheet_units,self.sheet_units)
+            self.aff = aff
             # it is convenient to bring back the rfs to their functional range here
             # because there are less multiplications to do after a summation
             #aff /= rfs.shape[1]*self.float_mult 
@@ -211,7 +212,8 @@ class CorticalMap(nn.Module):
             aff = x
                         
         if self.lat_reset:
-            lat = torch.relu(aff - self.adathresh)
+            lat *= 0
+            
             
         lat_pad = self.lri_units//2*self.lat_sparsity
         iters = self.lat_iters
@@ -241,9 +243,8 @@ class CorticalMap(nn.Module):
             lat = torch.relu(lat -lat_neg + aff*self.aff_scaler - self.adathresh + noise)
             lat = torch.tanh(lat) / self.saturation
                     
-            self.lat_mean = self.lat_mean*self.lat_beta + lat*(1-self.lat_beta)
+            self.lat_mean = self.lat_mean*self.lat_beta + lat
             self.lat_tracker[i + self.lat_iters*reco_flag] = lat
-            self.sqr_lat += lat**2
             
             if not lat.sum():
                 break
@@ -272,11 +273,15 @@ class CorticalMap(nn.Module):
             gap = (self.avg_acts-self.homeo_target)
             self.adathresh += self.homeo_lr*gap
             
-            beta = lat.mean() / self.homeo_target
-            self.strength -= (lat.max() - 1)*self.strength_lr*beta
+            #self.strength -= (lat.max() - 1)*self.strength_lr
+            sig_pow = (lat**2).sum() / ((lat>0).sum() + 1e-11)
+            self.avg_sig_pow = self.homeo_timescale*self.avg_sig_pow + sig_pow*(1-self.homeo_timescale)
+            self.strength -= (self.avg_sig_pow - self.sig_pow_target)*self.homeo_lr
                 
             self.x_tiles = x_tiles
             self.raw_aff = raw_aff
+            
+            #print(self.avg_sig_pow)
             
         return lat
                    
