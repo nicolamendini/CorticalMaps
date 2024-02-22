@@ -384,8 +384,10 @@ def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.5
 # funtion to implement batch cosine similarity
 def cosine_sim(X_target, X_eff):
     
+    X_target = X_target + 1e-7
+    X_eff = X_eff + 1e-7
     cos_sim = (X_target*X_eff).sum()
-    cos_sim /= torch.sqrt((X_target**2).sum()) * torch.sqrt((X_eff**2).sum()) + 1e-11
+    cos_sim /= torch.sqrt((X_target**2).sum()) * torch.sqrt((X_eff**2).sum())
     return cos_sim
 
 # Normalised Mean Absolute Error
@@ -413,7 +415,7 @@ def get_gini(X_eff):
     return gini
 
 # function to get the orientation map for plotting out of a set of receptive fields
-def get_orientations(model, on_off_flag=True, det_steps=2, discreteness=100):
+def get_orientations(model, on_off_flag=True, det_steps=2, discreteness=20):
     
     rfs = model.get_rfs()
     ksize = model.rf_units
@@ -574,20 +576,27 @@ def normalise(tensor, dims=None):
     return tensor / tensor_norm
 
 # function to create random sparse mask where each weight has exactly a certain percentage of units ON
-def get_weight_masks(param_configs, target_shape):
+def get_weight_masks(param_configs, conn_probability):
     # sparsity weights
+    target_shape = conn_probability.shape
     n_conditions = len(param_configs)
-    sparse_masks = torch.ones([n_conditions,*target_shape])
+    sparse_masks = torch.zeros([n_conditions,target_shape[0],target_shape[1]])
+        
     for eps in range(n_conditions):
-        for i in range(target_shape[0]):
-            # select some random weights inside the mask and turn them into zeros
-            end_selection = round((1-param_configs[eps])*target_shape[1])
-            end_selection = end_selection-5 if end_selection==target_shape[1] else end_selection
-            zero_locations = torch.randperm(target_shape[1])[:end_selection]
-            sparse_masks[eps,i,zero_locations,0] = 0
-    return sparse_masks
+        
+        conn_probability = conn_probability[:,:,0]
+        n_samples = round(conn_probability.shape[1]*param_configs[eps])
+            
+        samples = torch.multinomial(conn_probability, n_samples)
+        print(conn_probability.shape, samples.shape)
+        sparse_masks[eps][torch.arange(target_shape[0])[:,None], samples] = 1
+                     
+    return sparse_masks[:,:,:,None]
 
 def get_fisher_kurtosis(data):
     data = torch.tensor(data)
     return data.mean()**2 - data.std()**2
+
+def get_rmse(x0, x1):
+    return 1 - torch.sqrt(torch.mean((x0 - x1)**2))
 

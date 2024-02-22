@@ -9,6 +9,7 @@ import numpy as np
 import random
 import math
 import torchvision.transforms.functional as TF
+from matplotlib import cm
 
 from maps_helper import *
 
@@ -28,7 +29,8 @@ class CorticalMap(nn.Module):
         saturation,
         homeo_target,
         homeo_timescale,
-        dtype
+        dtype, 
+        lri_std=None
     ):
         
         super().__init__()
@@ -55,21 +57,20 @@ class CorticalMap(nn.Module):
         sre /= sre.sum()
         self.sre = sre.to(device).type(self.type)
         
-        #long range inhibition delayer mask
-        lri_std = rf_std*rf_sparsity/lat_sparsity
-        # 1 is added to the cutoff to compensate for the delayed start
+        lri_std = rf_std*rf_sparsity/lat_sparsity if not lri_std else lri_std
         lri_units = oddenise(round(lri_std*(self.cutoff)))
         lri_cutoff = get_circle(lri_units, lri_units/2)
         lri_mask = get_gaussian(lri_units, sre_std/lat_sparsity)
         lri_mask = (1 - (lri_mask/lri_mask.max())) 
         # long range inhibition envelope
         lri_envelope = get_gaussian(lri_units, lri_std)
-        lri_envelope *= lri_mask # proven to be good, dont remove it
+        #lri_envelope *= lri_mask # proven to be good, dont remove it
         lri_envelope *= lri_cutoff
         lri_envelope = lri_envelope.view(1,-1,1)
         lri_envelope /= lri_envelope.max()
-        self.lri_envelope = lri_envelope.to(device).type(self.type)        
-        
+        self.lri_envelope = lri_envelope.to(device).type(self.type)     
+        self.lri_cutoff = lri_cutoff.view(1,-1,1).to(device).type(self.type)   
+                
         # initialising the aff weights
         init_rfs = torch.ones(sheet_units**2, rf_channels*rf_units**2,1)
         init_rfs *= rf_envelope
@@ -119,19 +120,21 @@ class CorticalMap(nn.Module):
         self.homeo_timescale = homeo_timescale
         self.homeo_target = homeo_target
         self.saturation = saturation
-        self.strength = 1
+        self.exc_strength = 2
         self.lat_beta = 0.5
         self.aff_scaler = 1
         self.lat_reset = True
-        self.sig_pow_target = 0.38
-        self.avg_sig_pow = self.sig_pow_target
+        self.inh_strength = 1
+        self.oscillation_target = 0.05
+        self.strength_lr = 1e-1
         
         self.target_x_size = sheet_units
         # tha padding should not go below an expansion of 1
         self.target_x_size += (rf_units-1)*max(1,round(rf_sparsity))
         
         print(
-            '--- model initialised with rf units: {}, sre units: {}, lri units: {}'.format(
+            '--- model initialised with sheet units: {}, rf units: {}, sre units: {}, lri units: {}'.format(
+                sheet_units,
                 rf_units, 
                 sre_units, 
                 lri_units)
@@ -152,7 +155,9 @@ class CorticalMap(nn.Module):
         # unpacking some values
         lat_correlations = 0
         aff = 0
-        lat = self.last_lat
+        lat = self.last_lat.clone()
+        lat_neg = 0
+        lat_pos = 0
         noise = 0
         raw_aff = 0
         x_tiles = 0
@@ -163,9 +168,13 @@ class CorticalMap(nn.Module):
         with torch.no_grad():
             # float mult is used to bring the numerical values to more stable ranges
             # so instead of making avery weight average to 1, it makes it average float_mult
+            #self.rfs *= torch.sign(self.rfs)
+            #self.lat_weights *= torch.sign(self.lat_weights)
+            self.rfs *= self.rfs > 0
+            self.lat_weights *= self.lat_weights > 0
             self.rfs /= self.rfs.sum(1,keepdim=True) / (self.rfs.shape[1]*self.float_mult)
             self.lat_weights /= self.lat_weights.sum(1,keepdim=True) / (self.lat_weights.shape[1]*self.float_mult)
-                                
+                
         lat_weights = self.lat_weights
         rfs = self.rfs
                              
@@ -178,8 +187,14 @@ class CorticalMap(nn.Module):
                 
         lat_w = lat_weights.detach() 
         #lat_w /= lat_w.shape[1]*self.float_mult     
-        lat_w = lat_w * self.lri_envelope * sparse_masks
+        if isinstance(sparse_masks, int):
+            lat_w = lat_w * self.lri_cutoff
+        else:
+            lat_w = lat_w * sparse_masks * self.lri_cutoff
         lat_w /= lat_w.sum(1,keepdim=True) + 1e-7
+                
+        #plt.imshow(lat_w[1000,:,0].cpu().view(61,61))
+        #plt.show()
                                     
         # computing the afferent response
         if not reco_flag:
@@ -214,40 +229,56 @@ class CorticalMap(nn.Module):
         if self.lat_reset:
             lat *= 0
             
-            
         lat_pad = self.lri_units//2*self.lat_sparsity
         iters = self.lat_iters
         # reaction diffusion
         for i in range(iters):
-                    
+                                
             if noise_level and (i==0 or not fixed_noise) and not correlation:
                 noise = torch.randn(lat.shape, device=lat.device, dtype=lat.dtype) * noise_level
                 
             # short range excitation is applied first
             pos_pad = self.sre.shape[-1]//2
-            lat = F.pad(lat, (pos_pad,pos_pad,pos_pad,pos_pad), mode='reflect')
-            lat = F.conv2d(lat, self.sre) * self.strength
+            lat_pos = F.pad(lat, (pos_pad,pos_pad,pos_pad,pos_pad), mode='reflect')
+            lat_pos = F.conv2d(lat_pos, self.sre) * self.exc_strength
             
             # splitting into tiles and computing the lateral inhibitory component
             lat_tiles = F.pad(lat, (lat_pad,lat_pad,lat_pad,lat_pad), value=0)
             lat_tiles = F.unfold(lat_tiles, self.lri_units, dilation=self.lat_sparsity)
             #print(lat_tiles.shape, neg_w.shape)
             lat_tiles = lat_tiles.permute(2,0,1)
+                        
+            lat_neg = torch.bmm(lat_tiles, lat_w).view(1,1,self.sheet_units,self.sheet_units) * self.inh_strength
             
-            q = (i/iters)**2
-            lat_w_final = lat_w#*(1 + (1-q)*0.4) #+ self.untuned_inhibition*(1-q)
+            #lnpos = lat_neg>0
+            #lpos = lat_pos>0
+            #lnmean = lat_neg.sum()/(lnpos.sum()+1e-11)
+            #lmean = lat_pos.sum()/(lpos.sum()+1e-11)
+            #self.inh_strength -= (lnmean - 0.5*lmean)*1e-3
+            #self.inh_strength = 1 if self.inh_strength<1 else self.inh_strength
             
-            lat_neg = torch.bmm(lat_tiles, lat_w_final).view(1,1,self.sheet_units,self.sheet_units)
+            #print(lat_neg.mean(), lat.mean())
             
+            #if not isinstance(sparse_masks, int):
+            #    lat_neg *= 2
             # subtracting the thresholds and applying the nonlinearities
-            lat = torch.relu(lat -lat_neg + aff*self.aff_scaler - self.adathresh + noise)
+                        
+            lat = torch.relu((lat_pos - lat_neg) + aff*self.aff_scaler - self.adathresh + noise)
             lat = torch.tanh(lat) / self.saturation
-                    
-            self.lat_mean = self.lat_mean*self.lat_beta + lat
-            self.lat_tracker[i + self.lat_iters*reco_flag] = lat
             
-            if not lat.sum():
-                break
+            #plt.imshow(lat[0,0].cpu())
+            #plt.show()
+                                            
+            self.lat_mean = self.lat_mean*self.lat_beta + lat
+            self.lat_tracker[i] = lat
+            
+            
+        self.last_lat = lat
+        self.x_tiles = x_tiles
+        self.raw_aff = raw_aff
+            
+                
+        #-------------------------------------------------------------
             
         if (
             not reco_flag 
@@ -255,9 +286,9 @@ class CorticalMap(nn.Module):
             and not isinstance(sparse_masks, torch.Tensor)
             and not isinstance(rf_sparse_masks, torch.Tensor)
             and not correlation
+            and lat.sum()
         ):
-            
-            self.last_lat = lat
+
             if learning_flag:
 
                 # learn the lateral correlations
@@ -273,16 +304,28 @@ class CorticalMap(nn.Module):
             gap = (self.avg_acts-self.homeo_target)
             self.adathresh += self.homeo_lr*gap
             
-            #self.strength -= (lat.max() - 1)*self.strength_lr
-            sig_pow = (lat**2).sum() / ((lat>0).sum() + 1e-11)
-            self.avg_sig_pow = self.homeo_timescale*self.avg_sig_pow + sig_pow*(1-self.homeo_timescale)
-            self.strength -= (self.avg_sig_pow - self.sig_pow_target)*self.homeo_lr
+            #self.strength_lr = 1e-1
+            latmax = lat[lat>0]
+            #print(latmax, (latmax - 1)*self.strength_lr)
+            if latmax.shape[0]>0:
+                self.exc_strength -= (latmax.mean() - 0.5)*self.strength_lr    
                 
-            self.x_tiles = x_tiles
-            self.raw_aff = raw_aff
+                lnpos = lat_neg>0
+                lpos = lat_pos>0
+                lnmean = lat_neg.sum()/(lnpos.sum()+1e-11)
+                lmean = lat_pos.sum()/(lpos.sum()+1e-11)
+                self.inh_strength -= (lnmean - 0.3*lmean)*self.strength_lr   
+                self.inh_strength = 1 if self.inh_strength<1 else self.inh_strength  
+                #self.inh_strength = 1 if self.inh_strength<1 else self.inh_strength
             
-            #print(self.avg_sig_pow)
-            
+            #oscillations = self.lat_tracker[:iters].mean([1,2,3,4])
+            #oscillations -= oscillations.min()
+            #oscillations /= oscillations.max()
+            #oscillations = (oscillations[1:] - oscillations[:-1]).abs().mean()
+
+            #self.inh_strength -= (oscillations - self.oscillation_target)*self.strength_lr
+            #self.inh_strength = 1 if self.inh_strength<1 else self.inh_strength
+                                    
         return lat
                    
         

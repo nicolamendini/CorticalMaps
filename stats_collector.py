@@ -24,9 +24,9 @@ from maps_helper import *
 from scipy.optimize import curve_fit
 
 # PARAMETERS TO BE SIMULATED
-scalevals = torch.linspace(0,2.1,4)
+scalevals = torch.sqrt(torch.linspace(0,16,10))
 scalevals[0] = 0.01
-kvals = [1,2,3]
+kvals = torch.arange(10)+1
 reps = 1
 print(scalevals)
 trials = len(scalevals)
@@ -35,11 +35,10 @@ ktrials = len(kvals)
 # Function to collect stats
 def run_print_stats():
         
-    max_grid_size = round(config.CROPSIZE*kvals[-1]/config.KAPPA)
+    max_grid_size = round(config.CROPSIZE*np.sqrt(int(kvals[-1])))
     max_grid_size = evenise(max_grid_size)
+    stability_scores = torch.ones(reps,ktrials,trials)
     affinities = torch.ones(reps,ktrials,trials)
-    compressib = torch.ones(reps,ktrials,trials)
-    maps = -torch.ones(reps,ktrials,trials,max_grid_size,max_grid_size)
     c = 3
     X = import_norb().type(torch.float16).cuda()[:,:,:162,0,c:-c,c:-c]
     X = X.reshape(-1,1,X.shape[-1], X.shape[-1])
@@ -56,29 +55,38 @@ def run_print_stats():
 
     for r in range(reps):
         for k in range(ktrials):
+            
+            config.SPARSITY = [1./int(kvals[k])]
+            
             for i in range(trials):
 
                 config.EXC_STD = scalevals[i]
-                config.EXPANSION = kvals[k]/config.KAPPA
-                config.DILATION = kvals[k]
-                config.COMPRESSION = kvals[k]
+                config.EXPANSION = np.sqrt(int(kvals[-1]))
                 config.GRID_SIZE = round(config.CROPSIZE*config.EXPANSION)
-                config.GRID_SIZE = evenise(config.GRID_SIZE)
+                config.GRID_SIZE = evenise(config.GRID_SIZE)               
                 config.MAPCHOP = kvals[k]*3
+                
+                config.LRU = config.RF_STD*np.sqrt(int(kvals[k]))
 
                 model, stats = run(X, bar=True, eval_at_end=config.EVALUATE)
 
+                stability_scores[r,k,i] = stats['avg_sparsity']
                 affinities[r,k,i] = stats['rf_affinity']
-                compressib[r,k,i] = stats['avg_reco']
 
                 start = (max_grid_size - config.GRID_SIZE)//2
-                maps[r,k,i,start:start+config.GRID_SIZE,start:start+config.GRID_SIZE] = stats['map_tracker'][-1]
                 
-    sim_data = {'affinities': affinities, 'compressib': compressib, 'maps': maps}
-    torch.save(sim_data, 'sim_data/gcal_compressib/files_to_plot/sim_data.pt')
-    plot_from_file()
+    sim_data = {'affinities': affinities, 'stability': stability_scores}
+    torch.save(sim_data, 'sim_data/linear_stability/sim_data.pt')
     
     os.system("shutdown -h 0")
+    
+def print_lin_stats():
+    
+    sim_data = torch.load('sim_data/linear_stability/sim_data.pt')
+    affinities = sim_data['affinities']
+    stability = sim_data['stability']
+    print(affinities, stability)
+
     
 # function to collect stats about noise robustness
 def run_noise_stats():

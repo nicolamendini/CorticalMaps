@@ -107,7 +107,10 @@ def reco_step(model, compression_kernel, stats, reco_target=1.15):
 # function to compute the steps of model evaluation under noise conditions
 def eval_step(stats, model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed_noise=False, correlation=False):
     
-    lat = model.last_lat        
+    lat = model.last_lat.clone()   
+    
+    #plt.imshow(lat[0,0].cpu())
+    #plt.show()
             
     with torch.no_grad():
         lat_variation = model(
@@ -119,20 +122,24 @@ def eval_step(stats, model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed
             learning_flag=False,
             correlation=correlation
         )
-        
+       
     #plt.imshow(lat_variation[0,0].cpu())
     #plt.show()
+    
+    #plt.imshow(lat_variation[0,0].cpu() - lat[0,0].cpu())
+    #plt.show()
         
-    reco = torch.tanh(stats['network'](lat_variation.view(1,-1)))
+    #reco = torch.tanh(stats['network'](lat_variation.view(1,-1)))
     
     #plt.imshow(reco.detach().cpu().view(2,38,38)[0])
     #plt.show()
     
-    pad = model.rf_units//2
-    loss = (reco.flatten() - model.x[:,:,pad:-pad,pad:-pad].flatten())**2
-    score = 1 - loss.mean()    
-            
-    return score #cosine_sim(lat, lat_variation)
+    #pad = model.rf_units//2
+    #loss = (reco.flatten() - model.x[:,:,pad:-pad,pad:-pad].flatten())**2
+    #score = 1 - loss.mean()   
+    #result = get_rmse(lat, lat_variation) if lat.sum() else -1
+    result = cosine_sim(lat,lat_variation)
+    return result
     
 
 # plot the steps of the reconstruction
@@ -171,7 +178,7 @@ def collect_stats(idx, stats, model, sample, compression_kernel, sparse_masks, r
     # compute the first component of the metric
     x_tiles = model.x_tiles
     raw_aff = model.aff_cache
-    lat = model.last_lat
+    lat = model.last_lat.clone()
     aff_flat = raw_aff.detach().view(-1).float()
     x_norm_squared = (x_tiles**2).sum(1, keepdim=True)
     #x_norm = torch.sqrt(x_norm_squared)
@@ -235,14 +242,14 @@ def collect_stats(idx, stats, model, sample, compression_kernel, sparse_masks, r
                  for i in range(len(config.NOISE))]
             )
 
-        if config.SPARSITY and False:
+        if config.SPARSITY:
             # run one step of sparsity evaluation
             stats['sparsity_tracker'][idx] = torch.tensor(
                 [eval_step(stats, model, sparse_masks=sparse_masks[i]) 
                  for i in range(len(config.SPARSITY))]
             )
 
-        if config.RF_SPARSITY and False:
+        if config.RF_SPARSITY:
             # run one step of RF sparsity evaluation
             stats['rf_sparsity_tracker'][idx] = torch.tensor(
                 [eval_step(stats, model, rf_sparse_masks=rf_sparse_masks[i]) 

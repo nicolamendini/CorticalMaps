@@ -10,30 +10,32 @@ from maps_helper import *
 RET_LOG_STD = 1
 LGN_LOG_STD = 1
 HARDGC = True
-CG_EPS = 0.002 #4
-CG_SATURATION = 0.34
+CG_EPS = 0.001
+CG_SATURATION = 0.3
 LGN_ITERS = 0
 
 # V1 SETTINGS
 # ---------------------------------
-KAPPA = 2
+KAPPA = 1
 CROPSIZE = 38
-EXPANSION = 1
+EXPANSION = 3
 GRID_SIZE = evenise(round(CROPSIZE*EXPANSION))
 ITERS = 30
 # relative to CROPSIZE [0,1]
 HOMEO_TIMESCALE = 0.995
 RF_STD = 4
-EXC_STD = 1
+EXC_STD = 1.5
 # TARGET_STRENGTH = 0.8 is tested and proven to be the best
-TARGET_ACT = 0.05
+TARGET_ACT = 0.06
 V1_SATURATION = 1
+#LRU = np.sqrt(2)*RF_STD
+#LRU = None
 
 # TRAINING PARAMETERS
 # -----------------------------------
-N_BATCHES = 0
+N_BATCHES = 8000
 LR = 1e-3
-TARGET_LR_DEC = 5
+TARGET_LR_DEC = 10
 # fast mode is torch.float16
 DTYPE = torch.float32
 
@@ -53,19 +55,22 @@ LAT_RESET = True
 DILATION = max(int(EXC_STD*2.5),1)
 COMPRESSION = round(EXPANSION*3/2)
 DILATION = 1
-COMPRESSION = 3
+COMPRESSION = 1
 
 NOISE = torch.linspace(0.5,-9, 2)
 NOISE = list(torch.exp(NOISE))
+NOISE = []
 
-SPARSITY = [(i*0.1) for i in range(11)]
+SPARSITY = [0.1]
+
 RF_SPARSITY = [(i*0.1) for i in range(11)]
+RF_SPARSITY = []
 
 # PLOTTING SETTINGS
 # -----------------------------------
 CORR_SAMPLES = 5
 MAPCHOP = 6 * (EXPANSION>1)
-STATS_FREQ = 1000
+STATS_FREQ = 100
 EVAL_BATCHES = 1000
 
 # CONTINUOUS TRAINING PARAMETERS

@@ -43,8 +43,8 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False, evaluating=False
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda().type(config.DTYPE)
 
-    sparse_masks = get_weight_masks(config.SPARSITY, model.lat_weights.shape).cuda().type(config.DTYPE)
-    rf_sparse_masks = get_weight_masks(config.RF_SPARSITY, model.rfs.shape).cuda().type(config.DTYPE)
+    sparse_masks = get_weight_masks(config.SPARSITY, torch.ones(model.lat_weights.shape)).cuda().type(config.DTYPE)
+    rf_sparse_masks = 0 #get_weight_masks(config.RF_SPARSITY, model.rf_envelope).cuda().type(config.DTYPE)
 
 
     # defining the variables for the saccades
@@ -102,11 +102,11 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False, evaluating=False
 
         if not evaluating:
             
-            if config.LEARNING:
+            if config.LEARNING and model.last_lat.sum()>0:
                 # compute the loss value and perform one step of traning
                 loss = cosine_loss(model)
+                optimiser.zero_grad()
                 if loss!=0:
-                    optimiser.zero_grad()
                     loss.backward()
                     optimiser.step()
 
@@ -149,10 +149,11 @@ def new_model(X):
         config.V1_SATURATION,
         config.TARGET_ACT,
         config.HOMEO_TIMESCALE,
-        config.DTYPE
+        config.DTYPE,
+        config.LRU
     ).to(X.device)
 
-def train_NN(stats, debug=False, act_func=torch.tanhz):
+def train_NN(stats, debug=False, act_func=torch.tanh):
     
     samples = 10000
     X = stats['lat_tracker'][-samples:,None].cuda()
@@ -206,17 +207,16 @@ def train_NN(stats, debug=False, act_func=torch.tanhz):
     
     
 def evaluate_only(X, model, stats):
-    train_NN(stats, debug=False)
+    #train_NN(stats, debug=False)
     run(X, model, stats, bar=False, evaluating=True)
     stats['avg_reco'] = (stats['reco_tracker']).mean()
     stats['rf_affinity'] = (stats['affinity_tracker']).mean()
-    stats['avg_noise'] = (stats['noise_tracker']).mean(0)
-    stats['avg_corr_noise'] = (stats['corr_noise_tracker']).mean(0)
-    stats['avg_fixed_noise'] = (stats['fixed_noise_tracker']).mean(0)
-    stats['avg_sparsity'] = (stats['sparsity_tracker']).mean(0)
-    stats['avg_rf_sparsity'] = (stats['rf_sparsity_tracker']).mean(0)
-    stats['avg_mixed_case'] = (stats['mixed_case_tracker']).mean(0)
-    stn = 10 * torch.log10(model.avg_sig_pow.cpu() / torch.tensor(config.NOISE)**2)
+    stats['avg_noise'] = (stats['noise_tracker'][stats['noise_tracker']>0]).mean(0)
+    stats['avg_corr_noise'] = (stats['corr_noise_tracker'][stats['corr_noise_tracker']>0]).mean(0)
+    stats['avg_fixed_noise'] = (stats['fixed_noise_tracker'][stats['fixed_noise_tracker']>0]).mean(0)
+    stats['avg_sparsity'] = (stats['sparsity_tracker'][stats['sparsity_tracker']>0]).mean(0)
+    stats['avg_rf_sparsity'] = (stats['rf_sparsity_tracker'][stats['rf_sparsity_tracker']>0]).mean(0)
+    stats['avg_mixed_case'] = (stats['mixed_case_tracker'][stats['mixed_case_tracker']>0]).mean(0)
     print('final stats, affinity: {:.3f} reco {:.3f}'.format(
         stats['rf_affinity'],
         stats['avg_reco']
@@ -225,7 +225,6 @@ def evaluate_only(X, model, stats):
     print('avg_fixed noise: ', stats['avg_fixed_noise'])
     print('avg noise: ', stats['avg_noise'])
     print('avg corr noise: ', stats['avg_corr_noise'])
-    print('signal to noise: ', stn)
     print('avg sparsity: ', stats['avg_sparsity'])
     print('avg RF sparsity: ', stats['avg_rf_sparsity'])
     print('mixed case: ', stats['avg_mixed_case'])
