@@ -384,10 +384,10 @@ def count_pinwheels(orientations, border_cut, window=7, angsteps=100, thresh=1.5
 # funtion to implement batch cosine similarity
 def cosine_sim(X_target, X_eff):
     
-    X_target = X_target + 1e-7
-    X_eff = X_eff + 1e-7
+    X_target = X_target
+    X_eff = X_eff
     cos_sim = (X_target*X_eff).sum()
-    cos_sim /= torch.sqrt((X_target**2).sum()) * torch.sqrt((X_eff**2).sum())
+    cos_sim /= torch.sqrt((X_target**2).sum()) * torch.sqrt((X_eff**2).sum())  + 1e-11
     return cos_sim
 
 # Normalised Mean Absolute Error
@@ -581,14 +581,14 @@ def get_weight_masks(param_configs, conn_probability):
     target_shape = conn_probability.shape
     n_conditions = len(param_configs)
     sparse_masks = torch.zeros([n_conditions,target_shape[0],target_shape[1]])
-        
+    conn_probability = conn_probability[:,:,0]
+    
     for eps in range(n_conditions):
         
-        conn_probability = conn_probability[:,:,0]
-        n_samples = round(conn_probability.shape[1]*param_configs[eps])
+        n_samples = round(float((conn_probability[1]>0).sum())*param_configs[eps])
+        n_samples = max(n_samples,1)
             
         samples = torch.multinomial(conn_probability, n_samples)
-        print(conn_probability.shape, samples.shape)
         sparse_masks[eps][torch.arange(target_shape[0])[:,None], samples] = 1
                      
     return sparse_masks[:,:,:,None]

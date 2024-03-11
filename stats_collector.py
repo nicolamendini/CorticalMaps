@@ -13,7 +13,7 @@ from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 import matplotlib.font_manager as fm
 import os
 from matplotlib.ticker import FormatStrFormatter
-import seaborn as sns
+import seaborn as sb
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import config
@@ -24,13 +24,49 @@ from maps_helper import *
 from scipy.optimize import curve_fit
 
 # PARAMETERS TO BE SIMULATED
-scalevals = torch.sqrt(torch.linspace(0,16,10))
-scalevals[0] = 0.01
-kvals = torch.arange(10)+1
+scalevals = torch.sqrt(torch.linspace(0.01,9,9))
+kvals = torch.linspace(1,9,9)
 reps = 1
 print(scalevals)
 trials = len(scalevals)
 ktrials = len(kvals)
+
+def collect_lambdas():
+    
+    lambdas = torch.ones(trials)
+    c = 3
+    X = import_norb().type(torch.float16).cuda()[:,:,:162,0,c:-c,c:-c]
+    X = X.reshape(-1,1,X.shape[-1], X.shape[-1])
+    X, X_orig, X_mask = retina_lgn(
+        X,
+        config.RET_LOG_STD,
+        config.LGN_LOG_STD,
+        config.HARDGC,
+        config.RF_STD,
+        config.CG_EPS,
+        config.CG_SATURATION,
+        config.LGN_ITERS
+    )
+    
+    for i in range(trials):
+    
+        config.EXC_STD = scalevals[i]
+        model, stats = run(X, bar=True, eval_at_end=False)
+        
+        avg_peak, spectrum, avg_hist = get_typical_dist_fourier(
+                    stats['map_tracker'][-1], 
+                    0, 
+                    mask=0, 
+                    smoothing_std=0,
+                    match_std=1
+                )
+        
+        lambdas[i] = 1/avg_peak
+        
+    sim_data = {'lambdas': lambdas}
+    torch.save(sim_data, 'sim_data/lambdas/sim_data.pt')
+    os.system("shutdown -h 0")
+    
 
 # Function to collect stats
 def run_print_stats():
@@ -38,6 +74,7 @@ def run_print_stats():
     max_grid_size = round(config.CROPSIZE*np.sqrt(int(kvals[-1])))
     max_grid_size = evenise(max_grid_size)
     stability_scores = torch.ones(reps,ktrials,trials)
+    exc_sparsity = torch.ones(reps,ktrials,trials)
     affinities = torch.ones(reps,ktrials,trials)
     c = 3
     X = import_norb().type(torch.float16).cuda()[:,:,:162,0,c:-c,c:-c]
@@ -56,28 +93,33 @@ def run_print_stats():
     for r in range(reps):
         for k in range(ktrials):
             
-            config.SPARSITY = [1./int(kvals[k])]
+            config.SPARSITY = [1./float(kvals[k])]
+            config.EXC_SPRSITY = [1./float(kvals[k])]
             
             for i in range(trials):
 
                 config.EXC_STD = scalevals[i]
-                config.EXPANSION = np.sqrt(int(kvals[-1]))
+                config.EXPANSION = np.sqrt(float(kvals[-1]))
                 config.GRID_SIZE = round(config.CROPSIZE*config.EXPANSION)
                 config.GRID_SIZE = evenise(config.GRID_SIZE)               
                 config.MAPCHOP = kvals[k]*3
                 
-                config.LRU = config.RF_STD*np.sqrt(int(kvals[k]))
-
+                config.LR_STD = float(config.RF_STD*(config.EXC_STD+0.5))
+                
                 model, stats = run(X, bar=True, eval_at_end=config.EVALUATE)
-
+                
                 stability_scores[r,k,i] = stats['avg_sparsity']
+                exc_sparsity[r,k,i] = stats['avg_exc_sparsity']
                 affinities[r,k,i] = stats['rf_affinity']
 
                 start = (max_grid_size - config.GRID_SIZE)//2
                 
-    sim_data = {'affinities': affinities, 'stability': stability_scores}
+    sim_data = {
+        'affinities': affinities, 
+        'stability': stability_scores, 
+        'exc_sparsity': exc_sparsity
+    }
     torch.save(sim_data, 'sim_data/linear_stability/sim_data.pt')
-    
     os.system("shutdown -h 0")
     
 def print_lin_stats():
@@ -428,6 +470,51 @@ def plot_from_file():
     
     plt.savefig('sim_data/gcal_compressib/tradeoff.png')
     plt.savefig('sim_data/gcal_compressib/tradeoff.svg')
+    
+    
+# funtion to plot the stability lines
+def plot_stability_lines(stability, target_lines):
+    
+    sb.set_palette('colorblind')
+    plt.title('Connection reduction factor against LDEC area')
+    plt.ylabel('Connection reduction factor')
+    plt.xlabel('LDEC area (a.u.)')
+
+    for idx, i in enumerate(target_lines):
+
+        pass_locations = (stability > i).float().max(2,keepdim=True)
+        mask = pass_locations[0]>0
+        pass_locations = pass_locations[1]
+        min_pass_locations = torch.relu(pass_locations-1)
+        
+        top = stability.gather(2, pass_locations)[mask] 
+        bottom = stability.gather(2, min_pass_locations)[mask]
+        
+        pass_locations = pass_locations[mask]
+        min_pass_locations = min_pass_locations[mask]
+        
+        x = (i - top) / (top - bottom) + pass_locations
+        x[bottom>i] = 0
+        y = kvals[mask.squeeze()]
+                
+        plt.ylim(0, kvals[-1]+3)
+        sb.scatterplot(x=x, y=y)
+
+        # linear regression
+        sumx = x.sum()
+        sumy = y.sum()
+        sumxy = (x*y).sum()
+        sumxx = (x**2).sum()
+        m = sumxy / sumxx
+
+        maxx = stability.shape[2]-1
+        endpoint = maxx*m
+        sb.lineplot(x=np.array([0, maxx]), y=np.array([1, endpoint+1]), label='NS: ' + str(int(i*100)) + '%')
+
+        leg = plt.legend()
+        leg.get_frame().set_linewidth(0.0)
+    
+    plt.show()
     
     
     

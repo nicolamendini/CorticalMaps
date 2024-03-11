@@ -18,22 +18,22 @@ LGN_ITERS = 0
 # ---------------------------------
 KAPPA = 1
 CROPSIZE = 38
-EXPANSION = 3
+EXPANSION = 3.14
 GRID_SIZE = evenise(round(CROPSIZE*EXPANSION))
 ITERS = 30
 # relative to CROPSIZE [0,1]
 HOMEO_TIMESCALE = 0.995
 RF_STD = 4
-EXC_STD = 1.5
+EXC_STD = 0.1
 # TARGET_STRENGTH = 0.8 is tested and proven to be the best
-TARGET_ACT = 0.06
+TARGET_ACT = 0.07
 V1_SATURATION = 1
-#LRU = np.sqrt(2)*RF_STD
+LR_STD = 2.5*RF_STD
 #LRU = None
 
 # TRAINING PARAMETERS
 # -----------------------------------
-N_BATCHES = 8000
+N_BATCHES = 5000
 LR = 1e-3
 TARGET_LR_DEC = 10
 # fast mode is torch.float16
@@ -61,7 +61,10 @@ NOISE = torch.linspace(0.5,-9, 2)
 NOISE = list(torch.exp(NOISE))
 NOISE = []
 
-SPARSITY = [0.1]
+SPARSITY = list(np.linspace(0.01,1,10)) #[0.111]
+EXC_SPARSITY = list(np.linspace(0.01,1,10))
+SPARSITY = [0.25]
+EXC_SPARSITY = []
 
 RF_SPARSITY = [(i*0.1) for i in range(11)]
 RF_SPARSITY = []
@@ -71,7 +74,7 @@ RF_SPARSITY = []
 CORR_SAMPLES = 5
 MAPCHOP = 6 * (EXPANSION>1)
 STATS_FREQ = 100
-EVAL_BATCHES = 1000
+EVAL_BATCHES = 100
 
 # CONTINUOUS TRAINING PARAMETERS
 # -----------------------------------

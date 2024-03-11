@@ -26,6 +26,7 @@ def init_stats_dict(stats, device, crange, cropsize, evaluating):
         stats['avg_corr_noise'] = 0
         stats['avg_fixed_noise'] = 0
         stats['avg_sparsity'] = 0
+        stats['avg_exc_sparsity'] = 0
         stats['avg_rf_sparsity'] = 0
         stats['avg_mixed_case'] = 0
         stats['avg_acts'] = torch.zeros((1,1,config.GRID_SIZE,config.GRID_SIZE), device=device) + config.TARGET_ACT
@@ -59,6 +60,7 @@ def init_stats_dict(stats, device, crange, cropsize, evaluating):
     stats['corr_noise_tracker'] = torch.zeros(batches, len(config.NOISE))
     stats['fixed_noise_tracker'] = torch.zeros(batches, len(config.NOISE))
     stats['sparsity_tracker'] = torch.zeros(batches, len(config.SPARSITY))
+    stats['exc_sparsity_tracker'] = torch.zeros(batches, len(config.EXC_SPARSITY))
     stats['rf_sparsity_tracker'] = torch.zeros(batches, len(config.SPARSITY))
     stats['mixed_case_tracker'] = torch.zeros(batches, len(config.NOISE))
 
@@ -105,7 +107,16 @@ def reco_step(model, compression_kernel, stats, reco_target=1.15):
     return diff, lat_reco_trimmed, lat_trimmed, reco, compressed
 
 # function to compute the steps of model evaluation under noise conditions
-def eval_step(stats, model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed_noise=False, correlation=False):
+def eval_step(
+    stats, 
+    model, 
+    noise=None, 
+    sparse_masks=1, 
+    rf_sparse_masks=1, 
+    fixed_noise=False, 
+    correlation=False,
+    exc_sparse_masks=1
+):
     
     lat = model.last_lat.clone()   
     
@@ -120,7 +131,9 @@ def eval_step(stats, model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed
             sparse_masks=sparse_masks,
             rf_sparse_masks=rf_sparse_masks,
             learning_flag=False,
-            correlation=correlation
+            correlation=correlation,
+            exc_sparse_masks=exc_sparse_masks,
+            evaluating=True
         )
        
     #plt.imshow(lat_variation[0,0].cpu())
@@ -137,8 +150,11 @@ def eval_step(stats, model, noise=None, sparse_masks=1, rf_sparse_masks=1, fixed
     #pad = model.rf_units//2
     #loss = (reco.flatten() - model.x[:,:,pad:-pad,pad:-pad].flatten())**2
     #score = 1 - loss.mean()   
-    #result = get_rmse(lat, lat_variation) if lat.sum() else -1
+    #result0 = get_rmse(lat, lat_variation) if lat.sum() else -1
     result = cosine_sim(lat,lat_variation)
+    
+    #print(result, result0)
+    
     return result
     
 
@@ -168,7 +184,17 @@ def plot_reco_steps(reco, sample, lat, lat_reco, compressed, diff, grey=True):
     
     
 # collect the stats for this iteration
-def collect_stats(idx, stats, model, sample, compression_kernel, sparse_masks, rf_sparse_masks, evaluate=False):
+def collect_stats(
+    idx, 
+    stats, 
+    model, 
+    sample, 
+    compression_kernel, 
+    sparse_masks, 
+    rf_sparse_masks, 
+    exc_sparse_masks, 
+    evaluate=False
+):
 
     rfs_det = model.get_rfs()
     # if it is the right time and we are not in printing mode, get a snapshot of the map
@@ -247,6 +273,13 @@ def collect_stats(idx, stats, model, sample, compression_kernel, sparse_masks, r
             stats['sparsity_tracker'][idx] = torch.tensor(
                 [eval_step(stats, model, sparse_masks=sparse_masks[i]) 
                  for i in range(len(config.SPARSITY))]
+            )
+            
+        if config.EXC_SPARSITY:
+            # run one step of sparsity evaluation
+            stats['exc_sparsity_tracker'][idx] = torch.tensor(
+                [eval_step(stats, model, exc_sparse_masks=exc_sparse_masks[i]) 
+                 for i in range(len(config.EXC_SPARSITY))]
             )
 
         if config.RF_SPARSITY:

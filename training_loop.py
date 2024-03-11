@@ -43,7 +43,12 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False, evaluating=False
     compression_kernel /= compression_kernel.sum()
     compression_kernel = compression_kernel.cuda().type(config.DTYPE)
 
-    sparse_masks = get_weight_masks(config.SPARSITY, torch.ones(model.lat_weights.shape)).cuda().type(config.DTYPE)
+    sparse_masks = get_weight_masks(
+        config.SPARSITY, model.lri_cutoff.expand(model.sheet_units**2,-1,-1)
+                                   ).cuda().type(config.DTYPE)
+    exc_sparse_masks = get_weight_masks(
+        config.EXC_SPARSITY, model.sre_cutoff.expand(model.sheet_units**2,-1,-1)
+    ).cuda().type(config.DTYPE)
     rf_sparse_masks = 0 #get_weight_masks(config.RF_SPARSITY, model.rf_envelope).cuda().type(config.DTYPE)
 
 
@@ -94,7 +99,7 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False, evaluating=False
             plt.show()
 
         # feed the sample into the model
-        model(
+        lat = model(
             sample, 
             reco_flag=False, 
             learning_flag=config.LEARNING and not evaluating
@@ -102,7 +107,7 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False, evaluating=False
 
         if not evaluating:
             
-            if config.LEARNING and model.last_lat.sum()>0:
+            if config.LEARNING and lat.sum():
                 # compute the loss value and perform one step of traning
                 loss = cosine_loss(model)
                 optimiser.zero_grad()
@@ -119,7 +124,17 @@ def run(X, model=None, stats=None, bar=True, eval_at_end=False, evaluating=False
         stats['lr'] = lr
 
         if evaluating or idx%config.STATS_FREQ==0:
-            collect_stats(idx, stats, model, sample, compression_kernel, sparse_masks, rf_sparse_masks, evaluating)
+            collect_stats(
+                idx, 
+                stats, 
+                model, 
+                sample, 
+                compression_kernel, 
+                sparse_masks, 
+                rf_sparse_masks, 
+                exc_sparse_masks,
+                evaluating
+            )
 
         if config.PRINT or config.RECOPRINT:
             print('abort')
@@ -150,7 +165,7 @@ def new_model(X):
         config.TARGET_ACT,
         config.HOMEO_TIMESCALE,
         config.DTYPE,
-        config.LRU
+        config.LR_STD
     ).to(X.device)
 
 def train_NN(stats, debug=False, act_func=torch.tanh):
@@ -214,7 +229,10 @@ def evaluate_only(X, model, stats):
     stats['avg_noise'] = (stats['noise_tracker'][stats['noise_tracker']>0]).mean(0)
     stats['avg_corr_noise'] = (stats['corr_noise_tracker'][stats['corr_noise_tracker']>0]).mean(0)
     stats['avg_fixed_noise'] = (stats['fixed_noise_tracker'][stats['fixed_noise_tracker']>0]).mean(0)
-    stats['avg_sparsity'] = (stats['sparsity_tracker'][stats['sparsity_tracker']>0]).mean(0)
+    valid_samples = stats['sparsity_tracker']>0
+    stats['avg_sparsity'] = (stats['sparsity_tracker']*valid_samples).sum(0) / valid_samples.sum(0)
+    valid_samples = stats['exc_sparsity_tracker']>0
+    stats['avg_exc_sparsity'] = (stats['exc_sparsity_tracker']*valid_samples).sum(0) / valid_samples.sum(0)
     stats['avg_rf_sparsity'] = (stats['rf_sparsity_tracker'][stats['rf_sparsity_tracker']>0]).mean(0)
     stats['avg_mixed_case'] = (stats['mixed_case_tracker'][stats['mixed_case_tracker']>0]).mean(0)
     print('final stats, affinity: {:.3f} reco {:.3f}'.format(
@@ -226,6 +244,7 @@ def evaluate_only(X, model, stats):
     print('avg noise: ', stats['avg_noise'])
     print('avg corr noise: ', stats['avg_corr_noise'])
     print('avg sparsity: ', stats['avg_sparsity'])
+    print('avg exc sparsity: ', stats['avg_exc_sparsity'])
     print('avg RF sparsity: ', stats['avg_rf_sparsity'])
     print('mixed case: ', stats['avg_mixed_case'])
 
